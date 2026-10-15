@@ -1,0 +1,40 @@
+test_any_edit_invalidates_pass (__main__.QualityGate.test_any_edit_invalidates_pass) ... ok
+test_code_changed_during_tests_is_rejected (__main__.QualityGate.test_code_changed_during_tests_is_rejected) ... ok
+test_configuration_change_invalidates_pass (__main__.QualityGate.test_configuration_change_invalidates_pass) ... ok
+test_detached_ensure_starts_once_and_finishes (__main__.QualityGate.test_detached_ensure_starts_once_and_finishes) ... ok
+test_failed_coverage_is_not_a_quality_pass (__main__.QualityGate.test_failed_coverage_is_not_a_quality_pass) ... ok
+test_forgejo_registration_verifies_receipt_against_live_head (__main__.QualityGate.test_forgejo_registration_verifies_receipt_against_live_head) ... ok
+test_fresh_coverage_pass_and_cached_receipt (__main__.QualityGate.test_fresh_coverage_pass_and_cached_receipt) ... ok
+test_incarnation_change_invalidates_pass (__main__.QualityGate.test_incarnation_change_invalidates_pass) ... ok
+test_interpreter_that_produces_no_metrics_cannot_pass (__main__.QualityGate.test_interpreter_that_produces_no_metrics_cannot_pass) ... ok
+test_missing_or_stale_declared_report_fails_despite_artifacts (__main__.QualityGate.test_missing_or_stale_declared_report_fails_despite_artifacts) ... ok
+test_missing_owned_identity_field_is_rejected (__main__.QualityGate.test_missing_owned_identity_field_is_rejected) ... ok
+test_missing_report_blocks (__main__.QualityGate.test_missing_report_blocks) ... ok
+test_new_source_beside_report_invalidates_pass (__main__.QualityGate.test_new_source_beside_report_invalidates_pass) ... ok
+test_new_source_or_test_written_beside_artifacts_is_still_an_input (__main__.QualityGate.test_new_source_or_test_written_beside_artifacts_is_still_an_input) ... ok
+test_poll_scan_runs_without_an_agent_instruction (__main__.QualityGate.test_poll_scan_runs_without_an_agent_instruction) ... ok
+test_poll_waits_for_new_ready_event_after_agent_edits (__main__.QualityGate.test_poll_waits_for_new_ready_event_after_agent_edits) ... ok
+test_pr_registration_cannot_skip_quality_when_forge_has_head (__main__.QualityGate.test_pr_registration_cannot_skip_quality_when_forge_has_head) ... ok
+test_primary_copy_cannot_be_checked (__main__.QualityGate.test_primary_copy_cannot_be_checked) ... ok
+test_publication_head_must_match_checked_copy (__main__.QualityGate.test_publication_head_must_match_checked_copy) ... ok
+test_readiness_and_prevalidation_handoff_require_receipt (__main__.QualityGate.test_readiness_and_prevalidation_handoff_require_receipt) ... ok
+test_real_crapper_ignores_untouched_function_and_rejects_complex_edit (__main__.QualityGate.test_real_crapper_ignores_untouched_function_and_rejects_complex_edit) ... ok
+test_real_crapper_rejects_changed_function_absent_from_reports (__main__.QualityGate.test_real_crapper_rejects_changed_function_absent_from_reports) ... ok
+test_real_watcher_poll_starts_quality_check (__main__.QualityGate.test_real_watcher_poll_starts_quality_check) ... ok
+test_recorded_forge_head_cannot_bypass_quality (__main__.QualityGate.test_recorded_forge_head_cannot_bypass_quality) ... ok
+test_regenerated_caches_do_not_invalidate_source_identity (__main__.QualityGate.test_regenerated_caches_do_not_invalidate_source_identity) ... ok
+test_removed_type_overload_does_not_score_untouched_implementation (__main__.QualityGate.test_removed_type_overload_does_not_score_untouched_implementation) ... ok
+test_repeated_operational_meta_fields_use_last_value (__main__.QualityGate.test_repeated_operational_meta_fields_use_last_value) ... ok
+test_reused_pid_does_not_hold_or_kill_unrelated_process (__main__.QualityGate.test_reused_pid_does_not_hold_or_kill_unrelated_process) ... ok
+test_secondary_coverage_artifacts_do_not_invalidate_source_identity (__main__.QualityGate.test_secondary_coverage_artifacts_do_not_invalidate_source_identity) ... ok
+test_successful_quality_does_not_pollute_named_head_failure (__main__.QualityGate.test_successful_quality_does_not_pollute_named_head_failure) ... ok
+test_symlinked_report_does_not_delete_external_file (__main__.QualityGate.test_symlinked_report_does_not_delete_external_file) ... ok
+test_threshold_failure_feedback_once_and_repair (__main__.QualityGate.test_threshold_failure_feedback_once_and_repair) ... ok
+test_timeout_is_failure (__main__.QualityGate.test_timeout_is_failure) ... ok
+test_uncommitted_fix_cannot_qualify_published_head (__main__.QualityGate.test_uncommitted_fix_cannot_qualify_published_head) ... ok
+test_unconfigured_is_read_only_noop (__main__.QualityGate.test_unconfigured_is_read_only_noop) ... ok
+
+----------------------------------------------------------------------
+Ran 35 tests in 70.165s
+
+OK

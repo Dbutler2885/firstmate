@@ -1,0 +1,45 @@
+
+### Config: config/project-quality.json
+{"version":1,"projects":{"project":{"crapper_python":"/tmp/crapper-UAAy/venv/bin/python","coverage_command":["sh","-c","/tmp/crapper-UAAy/venv/bin/python -m coverage run -m unittest -q 2>&1 && /tmp/crapper-UAAy/venv/bin/python -m coverage lcov -q -o coverage/lcov.info"],"coverage_reports":["coverage/lcov.info"],"threshold":7,"timeout_seconds":120}}}
+
+### Agent adds an untested branchy function classify() and commits
+
+### Agent declares done; watcher poll runs 'fm-quality-check.sh scan' (no model involved)
+
+### Receipt after poll
+{'status': 'failed', 'reason': 'Crapper exited 2 (2 means threshold exceeded)', 'head': 'b84b1e0bf477d9f2eaa52399c933d70a2a5de645'}
+
+### Read-only status gate (exit code used by done/PR/merge paths)
+quality: Crapper exited 2 (2 means threshold exceeded); report: /tmp/fm-quality-demo-C7fz/home/state/quality/task-2tuoany7.log
+exit=1
+
+### Crapper report the agent is pointed at
+Task task; HEAD b84b1e0bf477d9f2eaa52399c933d70a2a5de645; base 3e0298d627751cadeb4b7950452f2f405edc222a; threshold 7
+----------------------------------------------------------------------
+Ran 1 test in 0.000s
+
+OK
+CRAP Report
+===========
+Languages: python
+
+Function                       Namespace                             CC    Cov%     CRAP
+----------------------------------------------------------------------------------------
+classify                       app                                    5  10.0%     23.2
+
+Feedback delivery:
+
+### Feedback delivered to the agent's steering inbox
+[fm-send to task] The mandatory quality check for HEAD b84b1e0bf477d9f2eaa52399c933d70a2a5de645 failed: Crapper exited 2 (2 means threshold exceeded). Read /tmp/fm-quality-demo-C7fz/home/state/quality/task-2tuoany7.log and /tmp/fm-quality-demo-C7fz/home/state/quality/task-2tuoany7.log.entries.json, fix the failing tests or simplify/test the changed functions, commit the repair, and report ready again. If the report identifies a missing tool or coverage setup problem, report that blocker to Firstmate. Do not change the quality configuration or receipt to bypass it.
+
+### Agent repairs: adds tests covering every branch, commits, re-declares done
+
+### Receipt after repair
+{'status': 'passed', 'reason': 'passed for the current code', 'head': '0390937193a38a3b9216088f21cb95ab71688296'}
+scored: [{'name': 'classify', 'namespace': 'app', 'complexity': 5, 'coverage': 100.0, 'crap': 5.0, 'path': 'app.py', 'language': 'python'}]
+quality: passed for the current code; report: /tmp/fm-quality-demo-C7fz/home/state/quality/task-0y0wuanc.log
+status exit=0
+
+### Any subsequent edit invalidates the pass
+quality: current code has not passed validation
+status exit=1
