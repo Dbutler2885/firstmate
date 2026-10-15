@@ -136,8 +136,9 @@ def task_base(root, project, meta):
 
 def excluded_output(name, reports):
     path = Path(name)
-    generated = {'.metrics', 'coverage', 'target', 'dist', 'build', 'out', 'node_modules', '.venv', '__pycache__', '.pytest_cache', '.nyc_output'}
-    if path.name in {'.coverage', 'coverage.xml'} or path.name.startswith('.coverage.') or generated.intersection(path.parts) or 'htmlcov' in path.parts:
+    if name in {'.coverage', 'coverage.xml', 'htmlcov/index.html'} or (len(path.parts) == 1 and path.name.startswith('.coverage.')):
+        return True
+    if path.parent.name == '__pycache__' and path.suffix == '.pyc':
         return True
     # A report written directly into a package must not hide new source files
     # beside it. Only the declared file, never its entire parent, is excluded.

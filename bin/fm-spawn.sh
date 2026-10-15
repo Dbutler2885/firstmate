@@ -5388,9 +5388,10 @@ SPAWN_GEN="s$(date +%s).${BASHPID:-$$}.$RANDOM"
 QUALITY_BASE=
 if [ "$KIND" != secondmate ]; then
   if [ "$RELAUNCH" -eq 1 ]; then
-    QUALITY_BASE=$(sed -n 's/^quality_base=//p' "$STATE/$ID.meta" 2>/dev/null || true)
+    QUALITY_BASE=$(fm_meta_get "$RELAUNCH_META" quality_base)
+  else
+    QUALITY_BASE=$(git -C "$WT" rev-parse HEAD) || exit 1
   fi
-  [ -n "$QUALITY_BASE" ] || QUALITY_BASE=$(git -C "$WT" rev-parse HEAD) || exit 1
 fi
 SPAWN_META_PATH="$STATE/$ID.meta"
 if [ "$SPAWN_META_LOCK_HELD" != 1 ]; then

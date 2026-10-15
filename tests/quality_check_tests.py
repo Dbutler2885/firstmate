@@ -198,6 +198,60 @@ raise SystemExit(int(os.environ.get('TEST_COVERAGE_EXIT','0')))
         (self.copy/'backend/new.py').write_text('def new():\n    return 1\n')
         self.assertEqual(self.call('status').returncode, 1)
 
+    def test_untracked_inputs_in_output_named_directories_are_bound(self):
+        self.assertEqual(self.call('run').returncode, 0)
+        accepted_key = self.receipt()['key']
+        for name in ('tests/coverage/test_new.py', 'cmd/build/new.go',
+                     '.metrics/new.py', 'target/new.rs', 'dist/new.js',
+                     'out/new.py', 'htmlcov/new.py', 'node_modules/new.js',
+                     '.venv/new.py', '__pycache__/new.py', '.pytest_cache/new.py',
+                     '.nyc_output/new.js', 'nested/coverage.xml'):
+            with self.subTest(name=name):
+                path = self.copy/name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('new input\n')
+                try:
+                    self.assertEqual(self.call('status').returncode, 1)
+                    result = self.call('run')
+                    self.assertEqual(result.returncode, 1, result.stdout)
+                    self.assertIn('Commit source and test changes', self.receipt()['reason'])
+                    first_key = self.receipt()['key']
+                    self.assertNotEqual(first_key, accepted_key)
+                    path.write_text('edited input\n')
+                    self.assertEqual(self.call('run').returncode, 1)
+                    self.assertNotEqual(self.receipt()['key'], first_key)
+                finally:
+                    path.unlink()
+                self.assertEqual(self.call('run').returncode, 0)
+
+    def test_local_landing_uses_the_checked_commit_when_branch_advances(self):
+        self.check_local_landing(advance=True)
+
+    def test_local_landing_of_current_checked_commit(self):
+        self.check_local_landing(advance=False)
+
+    def check_local_landing(self, advance):
+        self.assertEqual(self.call('run').returncode, 0)
+        checked = self.git(self.copy, 'rev-parse', 'HEAD').stdout.strip()
+        (self.copy/'source.py').write_text('def simple():\n    return 3\n')
+        self.git(self.copy, 'commit', '-qam', 'unchecked successor')
+        successor = self.git(self.copy, 'rev-parse', 'HEAD').stdout.strip()
+        self.git(self.copy, 'reset', '--hard', checked)
+        with self.meta.open('a') as meta:
+            meta.write('branch=task\n')
+        shutil.copy2(REPO/'bin/fm-merge-local.sh', self.home/'bin/fm-merge-local.sh')
+        for library in (REPO/'bin').glob('*-lib.sh'):
+            shutil.copy2(library, self.home/'bin'/library.name)
+        hold = self.home/'bin/fm-captain-hold.sh'
+        hold.write_text('#!/bin/sh\nset -e\n[ -z "$TEST_SUCCESSOR" ] || git -C "$TEST_TASK_COPY" merge --ff-only "$TEST_SUCCESSOR" >/dev/null\nexit 3\n')
+        hold.chmod(0o755)
+        result = subprocess.run([str(self.home/'bin/fm-merge-local.sh'), 'task'],
+                                env=dict(self.env, TEST_TASK_COPY=str(self.copy), TEST_SUCCESSOR=successor if advance else ''),
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.git(self.copy, 'rev-parse', 'HEAD').stdout.strip(), successor if advance else checked)
+        self.assertEqual(self.git(self.project, 'rev-parse', 'HEAD').stdout.strip(), checked)
+
     def test_interpreter_that_produces_no_metrics_cannot_pass(self):
         self.rule['crapper_python'] = shutil.which('true')
         self.write_config()
