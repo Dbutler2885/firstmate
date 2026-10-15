@@ -162,6 +162,10 @@ PROJECT=$(grep '^project=' "$META" | tail -1 | cut -d= -f2- || true)
 QUALITY_HEAD=$PR_HEAD
 if [ "$PROVIDER" = gitlab ] && [ -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/project-quality.json" ]; then
   QUALITY_HEAD=$(cd "$WT" && glab mr view "$URL" --output json 2>/dev/null | jq -er '.sha' 2>/dev/null) || QUALITY_HEAD=
+elif [ "$PROVIDER" = forgejo ] && [ -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/project-quality.json" ]; then
+  if fm_pr_forgejo_read_record "$HOST" "$PROJECT_PATH" "$NUMBER" && fm_pr_head_valid "$FM_PR_RECORD_HEAD"; then
+    QUALITY_HEAD=$FM_PR_RECORD_HEAD
+  fi
 fi
 if [ "${KIND:-ship}" = ship ]; then
   QUALITY_RC=0

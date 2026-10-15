@@ -82,9 +82,16 @@ def main():
             key = (unit.namespace, unit.name)
             deletion_changed_body = key in deleted_inside and (*key, unit_body(unit, source_bytes)) not in old_bodies
             if key not in old_keys or deletion_changed_body or any(start <= unit.end_line and end >= unit.start_line for start, end in spans):
-                units.append(unit)
+                units.append((name, unit))
     bundle.bind_sources([str(path.relative_to(root)) for path in iter_source_files([root])])
-    entries = sort_entries([make_entry(unit, bundle.percent_for(unit) or 0.0) for unit in units])
+    measured = []
+    for name, unit in units:
+        percent = bundle.percent_for(unit)
+        if percent is None:
+            print(f'No coverage metrics for changed function {unit.name} in {name}; declare a fresh report that covers it', file=sys.stderr)
+            return 1
+        measured.append(make_entry(unit, percent))
+    entries = sort_entries(measured)
     print(format_report(entries), end='')
     Path(request['output']).write_text(json.dumps([asdict(entry) for entry in entries], indent=2) + '\n')
     return 2 if any(entry.crap is None or entry.crap > request['threshold'] for entry in entries) else 0

@@ -204,9 +204,10 @@ case "$FM_CREW_STATE_RUNS_LIMIT" in ''|*[!0-9]*) FM_CREW_STATE_RUNS_LIMIT=200 ;;
 SEP=' · '
 
 # Emit the one canonical line and exit 0. Detail is optional.
+QUALITY_PROVEN=0
 emit() {  # <state> <source> [detail]
   local quality_reason quality_head quality_rc=0
-  if [ "$1" = "done" ] && [ "${KIND:-}" = ship ]; then
+  if [ "$1" = "done" ] && [ "${KIND:-}" = ship ] && [ "$QUALITY_PROVEN" != 1 ]; then
     if [ "$2" = run-step ]; then
       quality_head=$(strip_quotes "$(nm_field head)")
       quality_reason=$(fm_quality_accept "$STATE" "$ID" "$META" "$quality_head") || quality_rc=$?
@@ -258,6 +259,7 @@ fi
 emit_ship_status_done() {  # [extra-detail]
   local extra=${1:-} reason
   if reason=$(fm_dod_accept_ship_done "$KIND" "$(meta_value mode)" "$WT" "$(meta_value project)" "$LOG_LINE" "$STATE" "$ID" "$META"); then
+    [ "$(status_line_verb "$LOG_LINE")" != "done" ] || QUALITY_PROVEN=1
     emit "done" status-log "$(status_line_note "$LOG_LINE")${extra:+${SEP}$extra}"
   fi
   emit blocked status-log "$reason"

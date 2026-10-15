@@ -53,9 +53,10 @@ def metadata():
     for line in META.read_text().splitlines():
         key, separator, value = line.partition('=')
         if separator:
-            if key in result:
-                raise ValueError(f'Duplicate task field: {key}')
             result[key] = value
+    for key in ('project', 'worktree'):
+        if not result.get(key) or not Path(result[key]).is_absolute():
+            raise ValueError(f'Missing or invalid task field: {key}')
     return result
 
 
@@ -136,7 +137,7 @@ def task_base(root, project, meta):
 def excluded_output(name, reports):
     path = Path(name)
     generated = {'.metrics', 'coverage', 'target', 'dist', 'build', 'out', 'node_modules', '.venv', '__pycache__', '.pytest_cache', '.nyc_output'}
-    if path.name == '.coverage' or generated.intersection(path.parts):
+    if path.name in {'.coverage', 'coverage.xml'} or path.name.startswith('.coverage.') or generated.intersection(path.parts) or 'htmlcov' in path.parts:
         return True
     # A report written directly into a package must not hide new source files
     # beside it. Only the declared file, never its entire parent, is excluded.

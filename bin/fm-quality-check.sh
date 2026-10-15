@@ -17,7 +17,8 @@
 # declared reports. Source and test inputs must be committed before validation.
 # Crapper then scores functions touched since quality_base,
 # captured before launch. Receipts bind task incarnation, base, HEAD, tracked
-# edits, untracked inputs (excluding generated reports and caches), and the
+# edits, untracked inputs (excluding generated reports, coverage outputs, and
+# caches), and the
 # selected project rule. Changed code invalidates
 # a pass; changes during validation refuse publication. Failed attempts are
 # cached until edits or an explicit run retry, preventing repeated model wakes.

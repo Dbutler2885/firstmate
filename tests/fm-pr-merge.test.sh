@@ -4438,6 +4438,24 @@ test_allow_missing_refused_on_forgejo() {
   pass "fm-pr-merge refuses --allow-missing on Forgejo"
 }
 
+test_forgejo_merge_requires_current_quality_receipt() {
+  local case_dir rc
+  case_dir=$(make_forgejo_case forgejo-quality)
+  mkdir -p "$case_dir/project"
+  printf '{"version":1,"projects":{"project":{"crapper_python":"%s","coverage_command":["true"],"coverage_reports":["coverage/lcov.info"]}}}\n' \
+    "$(command -v python3)" > "$case_dir/home/config/project-quality.json"
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$FJ_URL" \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "forgejo-quality: a configured project without a current receipt must not merge"
+  assert_grep 'quality:' "$case_dir/stderr" \
+    "forgejo-quality: the refusal did not name the quality receipt"
+  [ ! -e "$case_dir/tea-merge-called" ] || fail "forgejo-quality: the pull request was merged without a quality receipt"
+  pass "fm-pr-merge refuses a Forgejo merge without a current quality receipt"
+}
+
 test_gitlab_head_override_args_refuse_before_recording
 test_secondmate_merge_reports_upward_once
 test_secondmate_merge_reports_on_the_local_route
@@ -4494,3 +4512,4 @@ test_app_bound_required_status_context_matches_by_name
 test_required_partial_reads_report_all_failures
 test_allow_red_refused_on_forgejo
 test_allow_missing_refused_on_forgejo
+test_forgejo_merge_requires_current_quality_receipt

@@ -64,6 +64,13 @@ assert not (root/os.environ.get('TEST_REPORT','coverage/lcov.info')).exists(), '
 time.sleep(float(os.environ.get('TEST_DELAY','0')))
 if os.environ.get('TEST_EDIT'):
     (root/'source.py').write_text('def simple():\\n    return 99\\n')
+if os.environ.get('TEST_ARTIFACTS'):
+    (root/f'.coverage.host.{os.getpid()}').write_text(str(time.time()))
+    (root/'coverage.xml').write_text(str(time.time()))
+    (root/'htmlcov').mkdir(exist_ok=True)
+    (root/'htmlcov/index.html').write_text(str(time.time()))
+if os.environ.get('TEST_NEW_INPUT'):
+    (root/os.environ['TEST_NEW_INPUT']).write_text('def late():\\n    return 1\\n')
 if os.environ.get('TEST_CACHE'):
     (root/'__pycache__').mkdir(exist_ok=True)
     (root/'__pycache__/source.pyc').write_text(str(time.time()))
@@ -141,6 +148,47 @@ raise SystemExit(int(os.environ.get('TEST_COVERAGE_EXIT','0')))
         self.assertEqual(self.call('status').returncode, 0)
         self.assertEqual(self.call('run', TEST_CACHE='1').returncode, 0)
         self.assertEqual(self.call('status').returncode, 0)
+
+    def test_secondary_coverage_artifacts_do_not_invalidate_source_identity(self):
+        result = self.call('run', TEST_ARTIFACTS='1')
+        self.assertEqual(result.returncode, 0, result.stdout + self.receipt()['reason'])
+        self.assertEqual(self.call('status').returncode, 0)
+        self.assertEqual(self.call('run', TEST_ARTIFACTS='1').returncode, 0)
+        self.assertEqual(self.call('status').returncode, 0)
+
+    def test_new_source_or_test_written_beside_artifacts_is_still_an_input(self):
+        for name in ('late.py', 'test_late.py'):
+            self.assertEqual(self.call('run', TEST_ARTIFACTS='1', TEST_NEW_INPUT=name).returncode, 1)
+            self.assertEqual(self.receipt()['status'], 'failed')
+            (self.copy/name).unlink()
+        self.assertEqual(self.call('run', TEST_ARTIFACTS='1').returncode, 0)
+        (self.copy/'test_new.py').write_text('def test_new():\n    assert True\n')
+        self.assertEqual(self.call('status').returncode, 1)
+
+    def test_missing_or_stale_declared_report_fails_despite_artifacts(self):
+        self.report.parent.mkdir()
+        self.report.write_text('stale coverage')
+        self.assertEqual(self.call('run', TEST_ARTIFACTS='1', TEST_MISSING='1').returncode, 1)
+        self.assertEqual(self.receipt()['status'], 'failed')
+        self.assertFalse(self.report.exists())
+        self.assertEqual(self.call('status').returncode, 1)
+
+    def test_repeated_operational_meta_fields_use_last_value(self):
+        with self.meta.open('a') as meta:
+            meta.write('decisions_reviewed=1\ndecision_keys=a\ndecisions_reviewed=1\ndecision_keys=a,b\n')
+        self.assertEqual(self.call('run').returncode, 0)
+        self.assertEqual(self.call('status').returncode, 0)
+        self.assertEqual(self.done().returncode, 0)
+        with self.meta.open('a') as meta:
+            meta.write('spawn_gen=s2.test\n')
+        self.assertEqual(self.call('status').returncode, 1)
+
+    def test_missing_owned_identity_field_is_rejected(self):
+        self.meta.write_text(self.meta.read_text().replace(f'worktree={self.copy}\n', ''))
+        result = self.call('run')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('worktree', result.stdout)
+        self.assertFalse((self.home / 'state/count').exists())
 
     def test_new_source_beside_report_invalidates_pass(self):
         self.rule['coverage_reports'] = ['backend/lcov.info']
@@ -319,6 +367,29 @@ raise SystemExit(int(os.environ.get('TEST_COVERAGE_EXIT','0')))
             time.sleep(.05)
         self.assertEqual(self.receipt()['status'], 'passed')
 
+    def forgejo_check(self, published):
+        fakebin = self.home/'fakebin'
+        fakebin.mkdir(exist_ok=True)
+        tea = fakebin/'tea'
+        tea.write_text('#!/bin/sh\ncase "$1 $2" in "login list") printf \'[{"name":"fixture","url":"https://forgejo.example"}]\\n\';; *) printf \'{"state":"open","merged":false,"head":{"sha":"%s"}}\\n\' "$TEST_PR_HEAD";; esac\n')
+        tea.chmod(0o755)
+        tmux = fakebin/'tmux'
+        tmux.write_text('#!/bin/sh\nexit 1\n')
+        tmux.chmod(0o755)
+        if 'mode=direct-PR' not in self.meta.read_text():
+            self.meta.write_text(self.meta.read_text().replace('mode=local-only', 'mode=direct-PR') + 'window=fm-quality-fixture:fm-task\nendpoint_task_id=task\nharness=claude\n')
+        env = dict(self.env, PATH=str(fakebin)+os.pathsep+self.env['PATH'], TEST_PR_HEAD=published)
+        return subprocess.run([str(REPO/'bin/fm-pr-check.sh'), 'task', 'https://forgejo.example/o/r/pulls/1'], env=env, capture_output=True, text=True, timeout=30)
+
+    def test_forgejo_registration_verifies_receipt_against_live_head(self):
+        head = self.git(self.copy, 'rev-parse', 'HEAD').stdout.strip()
+        self.assertEqual(self.call('run').returncode, 0)
+        stale = self.forgejo_check(self.base)
+        self.assertEqual(stale.returncode, 1)
+        self.assertIn('published head differs', stale.stderr)
+        current = self.forgejo_check(head)
+        self.assertNotIn('quality:', current.stderr, current.stdout + current.stderr)
+
     def test_recorded_forge_head_cannot_bypass_quality(self):
         head = self.git(self.copy, 'rev-parse', 'HEAD').stdout.strip()
         self.meta.write_text(self.meta.read_text() + 'pr=https://github.com/o/r/pull/1\npr_head=' + head + '\n')
@@ -335,6 +406,19 @@ raise SystemExit(int(os.environ.get('TEST_COVERAGE_EXIT','0')))
             time.sleep(.05)
         self.assertEqual(self.receipt()['status'], 'passed')
         self.assertEqual(self.done().returncode, 0)
+
+    @unittest.skipUnless(REAL_PYTHON, 'set FM_TEST_CRAPPER_PYTHON to exercise the real pinned Crapper package')
+    def test_real_crapper_rejects_changed_function_absent_from_reports(self):
+        self.rule['crapper_python'] = REAL_PYTHON
+        self.write_config()
+        (self.copy/'backend.py').write_text('def untested():\n    return 1\n')
+        self.git(self.copy, 'add', 'backend.py')
+        self.git(self.copy, 'commit', '-qm', 'uncovered backend')
+        result = self.call('run')
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('Crapper exited 1', self.receipt()['reason'])
+        self.assertIn('No coverage metrics for changed function untested in backend.py', Path(self.receipt()['log']).read_text())
+        self.assertEqual(self.call('status').returncode, 1)
 
     @unittest.skipUnless(REAL_PYTHON, 'set FM_TEST_CRAPPER_PYTHON to exercise the real pinned Crapper package')
     def test_removed_type_overload_does_not_score_untouched_implementation(self):

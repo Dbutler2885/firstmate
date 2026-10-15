@@ -1750,6 +1750,10 @@ case "$PROVIDER" in
     away_status=0
     require_current_away_authority || away_status=$?
     [ "$away_status" -eq 0 ] || exit "$away_status"
+    if ! quality_reason=$(fm_quality_accept "$STATE" "$ID" "$META" "$FM_PR_MERGE_HEAD"); then
+      echo "error: merge refused: $quality_reason" >&2
+      exit 1
+    fi
     # head_commit_id binds the merge to the head this run verified: Forgejo's
     # REST API rejects a mismatched value with "head out of date" (verified
     # against a real instance), matching --match-head-commit/--sha above. tea

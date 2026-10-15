@@ -1190,6 +1190,8 @@ Only declared reports are loaded, using Crapper's LCOV, JaCoCo, and Go parsers; 
 Use LCOV for Clojure with this integration.
 Explicit LCOV paths may be anywhere below the project root, including multiple packages; `source_root` qualifies package-relative source names so identical frontend and backend filenames remain distinct.
 Missing, empty, or unusable coverage blocks the check.
+A changed production function absent from every declared report also blocks the check instead of being scored as uncovered.
+Common secondary coverage outputs (`.coverage`, `.coverage.*`, `coverage.xml`, and `htmlcov/`) are not code inputs; any other new untracked file, including source or tests, still is.
 
 `threshold` defaults to 7 and must be a finite nonnegative number.
 A changed function passes at exactly the threshold and fails above it.
@@ -1202,7 +1204,7 @@ The launch commit is saved as `quality_base`; a current target merge-base exclud
 A configured legacy task without that field must be started again before it can qualify.
 The check's automatic trigger is the watcher's normal poll of a ship's reconciled completion declaration.
 Readiness, PR registration, and both PR and local landing refuse without a matching pass for configured tasks, including when a forge or no-mistakes already reports success.
-For GitHub and GitLab PR registration and landing, the receipt also has to match the live published head.
+For GitHub, GitLab, and Forgejo PR registration and landing, the receipt also has to match the live published head.
 If no-mistakes publishes fixes from its own copy, bring those changes back through the guarded `branch_sync` action AXI offers before reporting final readiness; an older local copy cannot qualify the published changes.
 Gerrit publication retains its existing tree-equivalence check because it publishes a squash, and Firstmate never submits that change.
 
