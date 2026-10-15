@@ -8,7 +8,9 @@
 # rule #1 "never run state-changing git in projects/", and it is narrow: it only
 # runs for mode=local-only tasks, only after the captain approves (or yolo=on
 # auto-approves), and only as a clean fast-forward - it refuses a diverged branch
-# and tells you to have the crewmate rebase. See AGENTS.md prime directives,
+# and tells you to have the crewmate rebase. A project configured in
+# config/project-quality.json also needs a current bin/fm-quality-check.sh pass
+# for the branch head. See AGENTS.md prime directives,
 # project management, and task lifecycle.
 # The task's existing per-task control lock serializes the captain-hold check
 # through that fast-forward. A still-held or unreadable row refuses before the

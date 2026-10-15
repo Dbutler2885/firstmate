@@ -25,7 +25,9 @@
 # Callers of the gate are bin/fm-crew-state.sh (current-state done),
 # bin/fm-pr-check.sh (PR registration), and bin/fm-inactive-reconcile.sh
 # (secondmate ledger-first publish of a child done). A ship `done:` is not
-# accepted while the named head exists only in the worker's disposable copy.
+# accepted while the named head exists only in the worker's disposable copy,
+# nor, for a project configured in config/project-quality.json, without a
+# current bin/fm-quality-check.sh pass (bin/fm-quality-lib.sh).
 # The check tests that head, not whether some branch moved. In no-mistakes
 # mode the pre-validation `done: {summary}` is the pipeline handoff and is
 # not gated; only the later CI-ready `done: PR <url> checks green` is, or on a
@@ -708,8 +710,9 @@ fm_dod_named_head_reachable_outside_worktree() {  # <worktree> <project> <mode> 
   [ "$mode" = local-only ] && fm_dod_ref_contains "$project" refs/heads "$sha"
 }
 
-# 0 when <line> is not a ship done: to gate, when it names the task's recorded
-# PR whose head the forge holds, when it names a Gerrit change whose current
+# Any ship done: first needs a current quality pass when the project is
+# configured (bin/fm-quality-lib.sh); then 0 when <line> is not a ship done:
+# to gate, when it names the task's recorded PR whose head the forge holds, when it names a Gerrit change whose current
 # patch set carries the worker copy's HEAD tree, or otherwise when its named
 # head - the worker copy's HEAD - is reachable outside that disposable copy. A
 # published-for-review report that names no Gerrit change is refused.

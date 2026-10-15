@@ -4,6 +4,9 @@
 # Refuses when bin/fm-dod-lib.sh will not accept the named head as reachable
 # outside the worker's disposable copy; in no-mistakes mode a forge-reported
 # head is that named head and is already stored on the forge.
+# A ship on a project configured in config/project-quality.json is also refused
+# without a current bin/fm-quality-check.sh pass matching the live published
+# head (Gerrit: the existing tree check), and the refusal ensures a check runs.
 # The watcher check source is byte-for-byte bin/fm-pr-poll.sh; task and PR data
 # live only in a private sidecar and are never interpolated into shell source.
 # A GitHub pull request URL, a GitLab merge request URL, and a Gerrit change URL
