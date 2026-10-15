@@ -1205,6 +1205,8 @@ A configured legacy task without that field must be started again before it can 
 The check's automatic trigger is the watcher's normal poll of a ship's reconciled completion declaration.
 Readiness, PR registration, and both PR and local landing refuse without a matching pass for configured tasks, including when a forge or no-mistakes already reports success.
 For GitHub, GitLab, and Forgejo PR registration and landing, the receipt also has to match the live published head.
+A GitHub landing for a configured task must also merge immediately, because a receipt proves only the commit it checked.
+[`bin/fm-pr-merge.sh`](../bin/fm-pr-merge.sh) refuses `--auto` for such a task even under an attended override, refuses unless the base branch's rules prove there is no merge queue, and never suggests a queued retry.
 If no-mistakes publishes fixes from its own copy, bring those changes back through the guarded `branch_sync` action AXI offers before reporting final readiness; an older local copy cannot qualify the published changes.
 Gerrit publication retains its existing tree-equivalence check because it publishes a squash, and Firstmate never submits that change.
 

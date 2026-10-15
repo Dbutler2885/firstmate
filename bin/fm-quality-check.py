@@ -20,7 +20,7 @@ CONFIG = Path(os.environ.get('FM_CONFIG_OVERRIDE') or HOME / 'config') / 'projec
 ACTION, TASK = sys.argv[1:3]
 if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', TASK):
     sys.exit('Invalid quality task id')
-META = Path(os.environ.get('FM_QUALITY_META_OVERRIDE') or STATE / f'{TASK}.meta') if ACTION == 'status' else STATE / f'{TASK}.meta'
+META = Path(os.environ.get('FM_QUALITY_META_OVERRIDE') or STATE / f'{TASK}.meta') if ACTION in {'status', 'rule'} else STATE / f'{TASK}.meta'
 STORE = STATE / 'quality'
 RESULT = STORE / f'{TASK}.json'
 
@@ -337,6 +337,11 @@ class locked:
 
 def main():
     if not CONFIG.exists() and not CONFIG.is_symlink():
+        return 3 if ACTION == 'rule' else 0
+    if ACTION == 'rule':
+        meta = metadata()
+        if meta.get('kind', 'ship') != 'ship' or project_rule(Path(meta['project']).resolve()) is None:
+            return 3
         return 0
     ctx = context()
     if ctx is None:
@@ -362,7 +367,7 @@ def main():
                 return 1
         return execute(ctx, result)
     if ACTION not in {'ensure', 'run'}:
-        raise ValueError('Expected ensure, status, or run')
+        raise ValueError('Expected ensure, status, rule, or run')
     token = ''
     if os.environ.get('FM_QUALITY_FROM_POLL') == '1':
         status = STATE / f'{TASK}.status'

@@ -73,6 +73,8 @@
 # An attended caller that already passed the configured method with --auto is
 # told instead that the accepted request has not entered the queue and its queue
 # state has to be re-checked.
+# A task whose project has a quality rule (bin/fm-quality-lib.sh) is never
+# offered those retry flags, because its merge must land the checked commit now.
 # No method is selected for the caller in any case. A rules response that names
 # no queue rule, one that could not be read, rules that disagree, and a method
 # this script does not recognise are four distinct outcomes and are reported
@@ -167,6 +169,12 @@
 # before the optional -- separator, re-enables those forge flags for an
 # explicit captain instruction and never skips the live green check, the
 # away-record read, or a captain hold.
+# On GitHub, a task whose project has a quality rule must also merge
+# immediately, since its receipt proves only the commit it checked: --auto is
+# refused even under --attended-override, and the merge is refused unless the
+# base branch's rules prove no merge queue, read the same way as while away.
+# As with the away-mode queue read, a queue rule or base change after that
+# preflight can still enqueue the merge; that limit is accepted, not hidden.
 #
 # Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--allow-red <check-name>] [--allow-missing <check-name>] [-- <extra forge merge args>]
 #
@@ -1434,6 +1442,31 @@ refuse_github_queue_while_away() {
   return 2
 }
 
+# A quality receipt proves only the exact commit it checked
+# (bin/fm-quality-lib.sh), so on a project with a quality rule a GitHub merge
+# must land that commit now. Auto-merge and a merge-queue entry are scheduled
+# to complete later, and the checked commit is not what they are bound to once
+# the head moves, so both are refused before the forge is asked for anything.
+# Projects without a rule are unaffected.
+FM_PR_QUALITY_RULE=false
+refuse_github_auto_merge_for_quality() {
+  [ "$FM_PR_QUALITY_RULE" = true ] || return 0
+  [ "$FM_PR_GITHUB_AUTO_REQUESTED" = true ] || return 0
+  echo "error: --auto is refused because this project has a quality rule: a scheduled merge can land a later commit than the one the quality pass checked; nothing was handed to the forge" >&2
+  return 1
+}
+
+# The queue half of the rule above, read with the same reader and proof
+# standard as the away-mode queue refusal: only a base branch whose rules prove
+# no merge queue may merge, and an unreadable rules response refuses.
+refuse_github_queue_for_quality() {
+  [ "$FM_PR_QUALITY_RULE" = true ] || return 0
+  github_read_queue_method
+  [ "$FM_PR_GITHUB_QUEUE_STATUS" = none ] && return 0
+  echo "error: GitHub merge refused because this project has a quality rule and the base branch's merge-queue state does not prove an immediate merge: a queued merge can land a later commit than the one the quality pass checked; nothing was handed to the forge" >&2
+  return 1
+}
+
 require_recorded_pr_identity() {
   local existing
   existing=$(grep '^pr=' "$META" | tail -1 | cut -d= -f2- || true)
@@ -1495,6 +1528,10 @@ github_report_queue_rules() {
   local queue_method methods_display
   if [ "$FM_PR_AWAY_POSTURE" = true ]; then
     printf 'error: the direct merge did not land while the away-posture record exists; merge-queue retry flags are unavailable because a queued merge would outlive its authority\n' >&2
+    return 0
+  fi
+  if [ "$FM_PR_QUALITY_RULE" = true ]; then
+    printf 'error: the direct merge did not land; merge-queue retry flags are unavailable because this project has a quality rule and a queued merge can land a later commit than the one the quality pass checked\n' >&2
     return 0
   fi
   github_read_queue_method
@@ -1604,6 +1641,10 @@ forgejo_confirm_merged() {
 away_status=0
 require_current_away_authority || away_status=$?
 [ "$away_status" -eq 0 ] || exit "$away_status"
+if [ "$PROVIDER" = github ] && fm_quality_rule_applies "$STATE" "$ID" "$META"; then
+  FM_PR_QUALITY_RULE=true
+fi
+refuse_github_auto_merge_for_quality || exit 1
 require_recorded_pr_identity || exit 1
 record_pr_metadata || exit 1
 require_released_captain_hold || exit 1
@@ -1656,6 +1697,7 @@ case "$PROVIDER" in
     require_current_away_authority || away_status=$?
     [ "$away_status" -eq 0 ] || exit "$away_status"
     refuse_github_queue_while_away || exit 2
+    refuse_github_queue_for_quality || exit 1
     merge_status=0
     if ! quality_reason=$(fm_quality_accept "$STATE" "$ID" "$META" "$FM_PR_MERGE_HEAD"); then
       echo "error: merge refused: $quality_reason" >&2

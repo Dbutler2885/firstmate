@@ -1481,7 +1481,7 @@ test_github_without_gh_still_uses_gh_axi_merge() {
   expect_code 1 "$rc" "github-without-gh: missing gh must refuse before recording"
   assert_grep 'merging a GitHub pull request requires gh on PATH' "$case_dir/stderr" \
     "github-without-gh: missing gh was not named"
-  assert_no_grep 'pr=' "$case_dir/state/task-x1.meta" \
+  assert_no_grep 'pr=https://github.com/example/repo/pull/72' "$case_dir/state/task-x1.meta" \
     "github-without-gh: pr= was recorded without gh"
   assert_absent "$case_dir/state/task-x1.check.sh" \
     "github-without-gh: a merge poll was armed without gh"
@@ -1508,7 +1508,7 @@ test_github_without_gh_failed_read_keeps_bookkeeping() {
   expect_code 1 "$rc" "github-without-gh-read-fails: missing gh must refuse before recording"
   assert_grep 'merging a GitHub pull request requires gh on PATH' "$case_dir/stderr" \
     "github-without-gh-read-fails: missing gh was not named"
-  assert_no_grep 'pr=' "$case_dir/state/task-x1.meta" \
+  assert_no_grep 'pr=https://github.com/example/repo/pull/72' "$case_dir/state/task-x1.meta" \
     "github-without-gh-read-fails: pr= was recorded without gh"
   assert_absent "$case_dir/state/task-x1.check.sh" \
     "github-without-gh-read-fails: a merge poll was armed without gh"
@@ -4456,6 +4456,140 @@ test_forgejo_merge_requires_current_quality_receipt() {
   pass "fm-pr-merge refuses a Forgejo merge without a current quality receipt"
 }
 
+# A real passing quality receipt for the case's task at its worktree HEAD, made
+# by bin/fm-quality-check.sh itself with a stand-in Crapper interpreter, so the
+# refusals below are attributable to scheduled merging and never to a missing
+# receipt. Points the gh mocks at that head and echoes it. Args: case_dir
+add_passing_quality_receipt() {
+  local case_dir=$1 head
+  mkdir -p "$case_dir/project"
+  printf '#!%s\nimport json, sys\nfrom pathlib import Path\nrequest = json.loads(Path(sys.argv[2]).read_text())\nPath(request["output"]).write_text("[]")\n' \
+    "$(command -v python3)" > "$case_dir/fake-crapper-python"
+  chmod +x "$case_dir/fake-crapper-python"
+  printf '{"version":1,"projects":{"project":{"crapper_python":"%s","coverage_command":["sh","-c","mkdir -p coverage && echo end_of_record > coverage/lcov.info"],"coverage_reports":["coverage/lcov.info"]}}}\n' \
+    "$case_dir/fake-crapper-python" > "$case_dir/home/config/project-quality.json"
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  printf '%s\n' "quality_base=$head" 'spawn_gen=s1.test' >> "$case_dir/state/task-x1.meta"
+  FM_HOME="$case_dir/home" FM_STATE_OVERRIDE="$case_dir/state" \
+    "$ROOT/bin/fm-quality-check.sh" run task-x1 > "$case_dir/quality-run" 2>&1 \
+    || fail "${case_dir##*/}: the fixture quality pass failed: $(cat "$case_dir/quality-run")"
+  add_gh_mocks "$case_dir" "$head"
+  : > "$case_dir/gh-axi.log"
+  : > "$case_dir/gh.log"
+  printf '%s\n' "$head"
+}
+
+test_github_quality_rule_merges_immediately_with_a_current_receipt() {
+  local case_dir rc
+  case_dir=$(make_case github-quality-immediate)
+  add_passing_quality_receipt "$case_dir" > /dev/null
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/71 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "github-quality-immediate: a current receipt on a queue-free base must merge"
+  assert_logged_gh_merge "$case_dir" 71 example/repo --squash
+  assert_grep 'verified: https://github.com/example/repo/pull/71 is merged' "$case_dir/stdout" \
+    "github-quality-immediate: the immediate merge was not verified"
+  pass "fm-pr-merge merges a quality-configured GitHub project immediately when no queue can defer it"
+}
+
+test_github_quality_rule_refuses_auto_merge() {
+  local case_dir rc spelling
+  for spelling in --auto --auto=true; do
+    case_dir=$(make_case "github-quality-auto${spelling#--auto}")
+    add_passing_quality_receipt "$case_dir" > /dev/null
+    set +e
+    run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/72 \
+      --attended-override -- "$spelling" --merge \
+      > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+    expect_code 1 "$rc" "github-quality-auto: a passing receipt must not authorize auto-merge"
+    assert_grep '--auto is refused because this project has a quality rule' "$case_dir/stderr" \
+      "github-quality-auto: the refusal did not name the quality rule"
+    assert_no_grep 'pr merge ' "$case_dir/gh.log" \
+      "github-quality-auto: auto-merge was handed to the forge"
+    assert_no_grep 'pr=https://github.com/example/repo/pull/72' "$case_dir/state/task-x1.meta" \
+      "github-quality-auto: the refused merge recorded a PR"
+  done
+  pass "fm-pr-merge refuses GitHub auto-merge for a quality-configured project even with a passing receipt"
+}
+
+test_github_quality_rule_refuses_an_unproved_queue_state() {
+  local case_dir rc variant
+  for variant in queue unreadable; do
+    case_dir=$(make_case "github-quality-$variant")
+    add_passing_quality_receipt "$case_dir" > /dev/null
+    if [ "$variant" = queue ]; then
+      printf 'merge_method=MERGE\n' > "$case_dir/github-rules"
+    else
+      : > "$case_dir/github-rules-fail"
+    fi
+    set +e
+    run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/73 \
+      > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+    expect_code 1 "$rc" "github-quality-$variant: a passing receipt must not authorize a queued merge"
+    assert_grep "quality rule and the base branch's merge-queue state does not prove an immediate merge" \
+      "$case_dir/stderr" "github-quality-$variant: the refusal did not name the unproved queue state"
+    assert_no_grep 'pr merge ' "$case_dir/gh.log" \
+      "github-quality-$variant: the merge was handed to the forge"
+    assert_no_grep '--auto' "$case_dir/stderr" \
+      "github-quality-$variant: the refusal suggested a scheduled retry"
+  done
+  pass "fm-pr-merge refuses a quality-configured GitHub merge unless the base provably has no merge queue"
+}
+
+test_github_quality_rule_omits_queue_retry_guidance() {
+  local case_dir rc
+  case_dir=$(make_case github-quality-retry)
+  add_passing_quality_receipt "$case_dir" > /dev/null
+  write_github_outcome "$case_dir" OPEN false false main
+  # A queue rule that appears between the preflight read and the merge.
+  printf '#!/bin/sh\nprintf "merge_method=MERGE\\n" > "%s"\n' "$case_dir/github-rules" \
+    > "$case_dir/queue-appears"
+  chmod +x "$case_dir/queue-appears"
+  set +e
+  FM_TEST_AWAY_MUTATE_AT_MERGE="$case_dir/queue-appears" \
+    run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/74 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-quality-retry: an unproved merge must fail"
+  assert_grep 'merge-queue retry flags are unavailable because this project has a quality rule' \
+    "$case_dir/stderr" "github-quality-retry: the refusal did not explain the withheld retry"
+  assert_no_grep '--auto' "$case_dir/stderr" \
+    "github-quality-retry: the refusal suggested a scheduled retry"
+  pass "fm-pr-merge withholds merge-queue retry flags for a quality-configured GitHub project"
+}
+
+test_github_project_without_quality_rule_keeps_queue_behavior() {
+  local case_dir rc
+  case_dir=$(make_case github-quality-other-project)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" 7575757575757575757575757575757575757575
+  write_github_outcome "$case_dir" OPEN false true main
+  printf 'merge_method=MERGE\n' > "$case_dir/github-rules"
+  printf '{"version":1,"projects":{"other":{"crapper_python":"%s","coverage_command":["true"],"coverage_reports":["coverage/lcov.info"]}}}\n' \
+    "$(command -v python3)" > "$case_dir/home/config/project-quality.json"
+  : > "$case_dir/gh-axi.log"
+  : > "$case_dir/gh.log"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/75 \
+    --attended-override -- --auto --merge \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "github-quality-other-project: a project without a rule must keep queued merging"
+  assert_logged_gh_merge "$case_dir" 75 example/repo --auto --merge
+  assert_grep 'verified: https://github.com/example/repo/pull/75 is queued' "$case_dir/stdout" \
+    "github-quality-other-project: the queued merge was not reported"
+  pass "fm-pr-merge keeps GitHub auto-merge and queueing for a project without a quality rule"
+}
+
 test_gitlab_head_override_args_refuse_before_recording
 test_secondmate_merge_reports_upward_once
 test_secondmate_merge_reports_on_the_local_route
@@ -4513,3 +4647,8 @@ test_required_partial_reads_report_all_failures
 test_allow_red_refused_on_forgejo
 test_allow_missing_refused_on_forgejo
 test_forgejo_merge_requires_current_quality_receipt
+test_github_quality_rule_merges_immediately_with_a_current_receipt
+test_github_quality_rule_refuses_auto_merge
+test_github_quality_rule_refuses_an_unproved_queue_state
+test_github_quality_rule_omits_queue_retry_guidance
+test_github_project_without_quality_rule_keeps_queue_behavior
