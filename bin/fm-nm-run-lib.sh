@@ -427,7 +427,8 @@ fm_nm_run_is_executing() {  # <toon-output>
 # "<status> <branch> <short-sha> <date> [<pr-url>]"; the `axi` surface has no
 # runs-listing subcommand - verified against the installed CLI). Prints the
 # status word of the branch's CURRENT run row, or nothing when the ledger
-# cannot prove attribution. When optional expected head $4 is supplied, its
+# cannot prove attribution; optional with-head $5 includes the resolved SHA
+# as status|full-sha. When optional expected head $4 is supplied, its
 # abbreviated commit identity must match the newest row. The branch's NEWEST
 # row alone decides; older rows are history and never answer for the present:
 #   - newest row's head resolves and matches the worktree (fm_nm_head_matches_worktree):
@@ -452,10 +453,10 @@ fm_nm_run_is_executing() {  # <toon-output>
 # route (fm_nm_run_is_executing above), which the caller pairs with its own
 # liveness evidence.
 # Read-only: git reads resolve objects in place; custody never changes.
-fm_nm_runs_status_for_worktree() {  # <worktree> <branch> <runs-list-output> [expected-head]
+fm_nm_runs_status_for_worktree() {  # <worktree> <branch> <runs-list-output> [expected-head] [with-head]
   local wt=$1 branch=$2 list=$3 expected_head=${4:-}
   local local_full row_full row st br sha day clock pr extra year_num month_num day_num max_day pending_st=''
-  local decided=''
+  local decided='' decided_head=''
   local_full=$(git -C "$wt" rev-parse HEAD 2>/dev/null) || return 0
   [ -n "$list" ] || return 0
   while IFS= read -r row; do
@@ -509,12 +510,17 @@ fm_nm_runs_status_for_worktree() {  # <worktree> <branch> <runs-list-output> [ex
     if [ -n "$row_full" ]; then
       if fm_nm_head_matches_worktree "$wt" "$sha"; then
         decided=$st
+        decided_head=$row_full
       fi
       break
     fi
     [ "$st" = running ] || break
     pending_st=$st
   done <<< "$list"
-  printf '%s' "$decided"
+  if [ "${5:-}" = with-head ] && [ -n "$decided" ]; then
+    printf '%s|%s' "$decided" "$decided_head"
+  else
+    printf '%s' "$decided"
+  fi
   return 0
 }

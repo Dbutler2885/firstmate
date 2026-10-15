@@ -211,7 +211,11 @@ emit() {  # <state> <source> [detail]
   local quality_reason quality_head quality_rc=0
   if [ "$1" = "done" ] && [ "${KIND:-}" = ship ] && [ "$QUALITY_PROVEN" != 1 ]; then
     if [ "$2" = run-step ]; then
-      quality_head=$(strip_quotes "$(nm_field head)")
+      if [ "$RUN_SOURCE" = coarse ]; then
+        quality_head=$COARSE_HEAD
+      else
+        quality_head=$(fm_nm_resolve_commit "$WT" "$(nm_run_head)")
+      fi
       quality_reason=$(fm_quality_accept "$STATE" "$ID" "$META" "$quality_head") || quality_rc=$?
     else
       quality_reason=$(fm_quality_accept "$STATE" "$ID" "$META") || quality_rc=$?
@@ -956,26 +960,32 @@ nm_runs_list() {
 # scratch worktree); with no branch there is no run to attribute to this crew.
 CREW_BRANCH=$(git -C "$WT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
 
+nm_run_head() {
+  local run_head
+  run_head=$(strip_quotes "$(nm_field head_sha)")
+  [ -n "$run_head" ] || run_head=$(strip_quotes "$(nm_field head)")
+  printf '%s' "$run_head"
+}
+
 # 0 if the active axi-status run's head field matches this worktree's code
 # identity. Branch match is a precondition (caller). Rule owned by
 # fm_nm_head_matches_worktree in bin/fm-nm-run-lib.sh.
 nm_run_head_matches_worktree() {
-  local run_head
-  run_head=$(strip_quotes "$(nm_field head)")
-  fm_nm_head_matches_worktree "$WT" "$run_head"
+  fm_nm_head_matches_worktree "$WT" "$(nm_run_head)"
 }
 
 HAVE_RUN=0
 # RUN_SOURCE distinguishes the two ways HAVE_RUN=1 can happen: "full" means
 # $RUN_OUT is real `axi status` TOON with step/gate detail (including a
 # same-branch run the strict head rule rejected but the ledger proved is this
-# worktree's pipeline-owned continuation); "coarse" means only a bare status
-# word came back from the runs-list fallback, so the run-step block below skips
+# worktree's pipeline-owned continuation); "coarse" means status and head
+# came back from the runs-list fallback, so the run-step block below skips
 # the TOON field parsing entirely for this crew.
 RUN_SOURCE=full
 NM_DAEMON_ANSWER=""
 RUN_DEAD_DAEMON=""
 COARSE_STATUS=""
+COARSE_HEAD=""
 SELECTED_RUN_ID=""
 # Scouts and secondmates never drive a no-mistakes validation of their own
 # worktree, so skip the lookup for them and read state from pane/log directly.
@@ -1022,9 +1032,9 @@ if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/n
         if nm_run_head_matches_worktree || fm_nm_run_is_pipeline_owned_active "$RUN_OUT" \
           || { fm_nm_run_is_executing "$RUN_OUT" && ! nm_daemon_answered_down; }; then
           HAVE_RUN=1
-        elif [ -z "$(fm_nm_resolve_commit "$WT" "$(strip_quotes "$(nm_field head)")")" ]; then
+        elif [ -z "$(fm_nm_resolve_commit "$WT" "$(nm_run_head)")" ]; then
           if fm_nm_run_is_active "$RUN_OUT" \
-            && [ "$(fm_nm_runs_status_for_worktree "$WT" "$CREW_BRANCH" "$(nm_runs_list)" "$(strip_quotes "$(nm_field head)")")" = running ]; then
+            && [ "$(fm_nm_runs_status_for_worktree "$WT" "$CREW_BRANCH" "$(nm_runs_list)" "$(nm_run_head)")" = running ]; then
             # The anchor PROVED code identity; only liveness can still fail, so
             # a dead daemon is reported as such rather than as an identity
             # failure, and a parked run keeps its gate and findings.
@@ -1056,7 +1066,8 @@ if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/n
         # Without run ids, contradictory liveness cannot prove precedence.
         # A live replacement also needs an id-addressed status read: a bare
         # "running" row cannot tell working from waiting at a gate.
-        ledger_status=$(fm_nm_runs_status_for_worktree "$WT" "$CREW_BRANCH" "$(nm_runs_list)")
+        ledger_record=$(fm_nm_runs_status_for_worktree "$WT" "$CREW_BRANCH" "$(nm_runs_list)" '' with-head)
+        ledger_status=${ledger_record%%|*}
         if fm_nm_run_is_active "$RUN_OUT"; then
           if [ "$(fm_nm_run_status_class "$ledger_status")" = terminal ]; then
             emit unknown run-step "run records disagree; run ids: $(strip_quotes "$(nm_field id)"), competing identity unavailable"
@@ -1064,10 +1075,13 @@ if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/n
         else
           if [ "$(fm_nm_run_status_class "$ledger_status")" = live ]; then
             emit unknown run-step "replacement run identity unavailable; run ids: $(strip_quotes "$(nm_field id)"), replacement unavailable"
-          elif [ -n "$ledger_status" ] \
-            && [ "$ledger_status" != "$(strip_quotes "$(nm_field status)")" ] \
-            && [ "$ledger_status" != "$(strip_quotes "$(nm_field outcome)")" ]; then
+          elif [ -n "$ledger_status" ] && {
+            { [ "$ledger_status" != "$(strip_quotes "$(nm_field status)")" ] \
+              && [ "$ledger_status" != "$(strip_quotes "$(nm_field outcome)")" ]; } \
+            || [ "${ledger_record#*|}" != "$(fm_nm_resolve_commit "$WT" "$(nm_run_head)")" ];
+          }; then
             COARSE_STATUS=$ledger_status
+            COARSE_HEAD=${ledger_record#*|}
             RUN_SOURCE=coarse
           fi
         fi
@@ -1078,15 +1092,15 @@ if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/n
         # `[ -n "$RUN_OUT" ]`: an empty/timed-out primary call means the CLI
         # itself did not respond, so retrying it immediately with a second
         # bounded call would just double the wait for no better answer.
-        COARSE_STATUS=$(fm_nm_runs_status_for_worktree "$WT" "$CREW_BRANCH" "$(nm_runs_list)")
+        coarse_record=$(fm_nm_runs_status_for_worktree "$WT" "$CREW_BRANCH" "$(nm_runs_list)" '' with-head)
+        COARSE_STATUS=${coarse_record%%|*}
+        COARSE_HEAD=${coarse_record#*|}
         if [ -n "$COARSE_STATUS" ]; then
           HAVE_RUN=1
-          # A branch-matching answer the strict rule rejected is this branch's
-          # own current run once the ledger proves the pipeline-owned
-          # continuation, so its axi TOON is the authoritative run detail
-          # (RUN_SOURCE stays full); only a foreign-branch answer leaves
-          # coarse status-word detail.
-          [ "$run_branch" = "$CREW_BRANCH" ] || RUN_SOURCE=coarse
+          if [ "$run_branch" != "$CREW_BRANCH" ] || [ "$COARSE_STATUS" != running ] \
+            || ! fm_nm_run_is_active "$RUN_OUT"; then
+            RUN_SOURCE=coarse
+          fi
         fi
       fi
     fi

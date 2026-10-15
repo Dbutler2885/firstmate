@@ -12,8 +12,9 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 import subprocess
+from xml.etree import ElementTree
 
-from crapper.coverage import CoverageBundle, parse_go_profile, parse_jacoco_index, parse_lcov
+from crapper.coverage import CoverageBundle, _profile_segments, parse_go_profile, parse_jacoco_index, parse_lcov
 from crapper.crap import make_entry, sort_entries
 from crapper.discover import SKIP_DIRS, is_test_file, iter_source_files, language_of
 from crapper.languages import functions_in_file
@@ -24,6 +25,21 @@ def unit_body(unit, source):
     if unit.start_byte >= 0 and unit.end_byte >= unit.start_byte:
         return source[unit.start_byte:unit.end_byte]
     return b''.join(source.splitlines(keepends=True)[unit.start_line-1:unit.end_line])
+
+
+def has_metrics(bundle, unit):
+    if unit.language == 'go':
+        segments = _profile_segments(bundle.go_profile, unit.path, bundle.source_parts) or []
+        return any(start <= unit.end_line and end >= unit.start_line and statements > 0 for start, end, statements, _ in segments)
+    if unit.language == 'java':
+        names = [unit.jacoco_class] if unit.jacoco_class else []
+        if unit.namespace not in names:
+            names.append(unit.namespace)
+        methods = [method for name in names for method in (bundle.jacoco or {}).get(f'{name}#{unit.name}', [])]
+        method = min(methods, key=lambda method: abs(method.line - unit.start_line), default=None)
+        return method is not None and unit.start_line <= method.line <= unit.end_line and method.missed + method.covered > 0
+    record = bundle._lcov_lines(unit.path)
+    return record is not None and any(unit.start_line <= line <= unit.end_line and total > 0 for metrics in (record, record.branches) for line, (_, total) in metrics.items())
 
 
 def main():
@@ -41,6 +57,9 @@ def main():
                 raise ValueError(f"No usable Go coverage in {report['path']}")
             bundle.go_profile = {**(bundle.go_profile or {}), **records}
         elif path.name == 'jacoco.xml':
+            if any(counter.get('type') == 'INSTRUCTION' and (not counter.get('missed') or not counter.get('covered'))
+                   for counter in ElementTree.fromstring(text).iter('counter')):
+                raise ValueError(f"Missing JaCoCo instruction metrics in {report['path']}")
             records = parse_jacoco_index(text)
             if not records:
                 raise ValueError(f"No usable JaCoCo coverage in {report['path']}")
@@ -86,7 +105,7 @@ def main():
     bundle.bind_sources([str(path.relative_to(root)) for path in iter_source_files([root])])
     measured = []
     for name, unit in units:
-        percent = bundle.percent_for(unit)
+        percent = bundle.percent_for(unit) if has_metrics(bundle, unit) else None
         if percent is None:
             print(f'No coverage metrics for changed function {unit.name} in {name}; declare a fresh report that covers it', file=sys.stderr)
             return 1

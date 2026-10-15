@@ -462,6 +462,136 @@ raise SystemExit(int(os.environ.get('TEST_COVERAGE_EXIT','0')))
         self.assertEqual(self.done().returncode, 0)
 
     @unittest.skipUnless(REAL_PYTHON, 'set FM_TEST_CRAPPER_PYTHON to exercise the real pinned Crapper package')
+    def test_real_lcov_requires_metrics_in_the_changed_function(self):
+        self.check_real_function_metrics('module.py', 'def stable():\n    return 1\n',
+                                         'def stable():\n    return 1\n\ndef changed():\n    return 2\n',
+                                         'lcov.info', 'changed', [
+            ('SF:module.py\nDA:2,1\nend_of_record\n', None),
+            ('SF:module.py\nBRDA:2,0,0,1\nend_of_record\n', None),
+            ('SF:module.py\nDA:5,0\nend_of_record\n', 0),
+            ('SF:module.py\nBRDA:5,0,0,-\nend_of_record\n', 0),
+            ('SF:module.py\nDA:5,1\nend_of_record\n', 100),
+        ])
+
+    @unittest.skipUnless(REAL_PYTHON, 'set FM_TEST_CRAPPER_PYTHON to exercise the real pinned Crapper package')
+    def test_real_go_requires_statements_in_the_changed_function(self):
+        stable = 'package sample\n\nfunc Stable() int {\n    return 1\n}\n'
+        self.check_real_function_metrics('module.go', stable,
+                                         stable + '\nfunc Changed() int {\n    return 2\n}\n',
+                                         'coverage.out', 'Changed', [
+            ('mode: set\nexample/module.go:3.1,5.2 1 1\n', None),
+            ('mode: set\nexample/module.go:7.1,9.2 0 1\n', None),
+            ('mode: set\nexample/module.go:7.1,9.2 1 0\n', 0),
+            ('mode: set\nexample/module.go:7.1,9.2 1 1\n', 100),
+        ])
+
+    @unittest.skipUnless(REAL_PYTHON, 'set FM_TEST_CRAPPER_PYTHON to exercise the real pinned Crapper package')
+    def test_real_jacoco_requires_instruction_metrics_for_the_changed_method(self):
+        cases = []
+        for line, counter, percent in [(3, '', None), (3, 'missed="2"', None), (3, 'covered="2"', None),
+                                       (3, 'missed="" covered="2"', None), (3, 'missed="2" covered=""', None),
+                                       (3, 'missed="0" covered="0"', None),
+                                       (2, 'missed="0" covered="2"', None),
+                                       (3, 'missed="2" covered="0"', 0),
+                                       (3, 'missed="0" covered="2"', 100)]:
+            cases.append((f'<report><package name=""><class name="Metrics"><method name="changed" line="{line}"><counter type="INSTRUCTION" {counter}/></method></class></package></report>', percent))
+        self.check_real_function_metrics('Metrics.java', 'class Metrics {\n    int stable() { return 1; }\n}\n',
+                                         'class Metrics {\n    int stable() { return 1; }\n    int changed() { return 2; }\n}\n',
+                                         'jacoco.xml', 'changed', cases)
+
+    def check_real_function_metrics(self, filename, before, after, report, function, cases):
+        self.git(self.copy, 'reset', '--hard', self.base)
+        (self.copy/filename).write_text(before)
+        self.git(self.copy, 'add', filename)
+        self.git(self.copy, 'commit', '-qm', 'function baseline')
+        baseline = self.git(self.copy, 'rev-parse', 'HEAD').stdout.strip()
+        self.meta.write_text(self.meta.read_text().replace(self.base, baseline))
+        (self.copy/filename).write_text(after)
+        self.git(self.copy, 'commit', '-qam', 'new function')
+        self.coverage.write_text('import os\nfrom pathlib import Path\np=Path(os.environ["TEST_REPORT"]); p.parent.mkdir(exist_ok=True); p.write_text(os.environ["TEST_METRICS"])\n')
+        self.rule['coverage_reports'] = ['coverage/' + report]
+        self.rule['crapper_python'] = REAL_PYTHON
+        self.write_config()
+        for content, percent in cases:
+            with self.subTest(report=content):
+                result = self.call('run', TEST_REPORT='coverage/' + report, TEST_METRICS=content)
+                log = Path(self.receipt()['log']).read_text()
+                if percent is None:
+                    self.assertEqual(result.returncode, 1, result.stdout + log)
+                    self.assertRegex(log, f'No coverage metrics for changed function {function}|Missing JaCoCo instruction metrics')
+                else:
+                    self.assertEqual(result.returncode, 0, result.stdout + log)
+                    entries = json.loads(Path(self.receipt()['entries']).read_text())
+                    self.assertEqual([(entry['name'], entry['coverage']) for entry in entries], [(function, percent)])
+
+    def crew_completion(self, primary, ledger='', selected='', outcome='passed', head=None, full=True):
+        checked = self.git(self.copy, 'rev-parse', 'HEAD').stdout.strip()
+        run_head = head or checked
+        run = f'run:\n  id: 01TASK\n  branch: task\n  status: completed\n  head: {run_head[:8]}\n'
+        if full:
+            run += f'  head_sha: {run_head}\n'
+        if outcome:
+            run += f'outcome: {outcome}\n'
+        overview = f'count: 1 of 1 total\nruns[1]{{id,branch,status,head,pr}}:\n  01TASK,task,completed,{run_head[:8]},\n' if selected else run
+        fakebin = self.home/'fakebin'
+        fakebin.mkdir(exist_ok=True)
+        driver = fakebin/'no-mistakes'
+        driver.write_text('#!/bin/sh\ncase "$*" in\n"axi status") printf "%s\\n" "$TEST_AXI_STATUS";;\n"axi status --run 01TASK") printf "%s\\n" "$TEST_AXI_SELECTED";;\naxi) printf "%s\\n" "$TEST_AXI_HOME";;\nruns*) printf "%s\\n" "$TEST_RUNS";;\n"daemon status") printf "daemon running\\n";;\nesac\n')
+        driver.chmod(0o755)
+        return subprocess.run([str(REPO/'bin/fm-crew-state.sh'), 'task'],
+                              env=dict(self.env, PATH=str(fakebin) + os.pathsep + os.environ['PATH'],
+                                       TEST_AXI_STATUS=primary or run, TEST_AXI_HOME=overview,
+                                       TEST_AXI_SELECTED=run, TEST_RUNS=ledger),
+                              capture_output=True, text=True, timeout=30)
+
+    def prepare_crew_completion(self):
+        with self.meta.open('a') as meta:
+            meta.write('mode=no-mistakes\nwindow=fm:fm-task\nharness=claude\n')
+        self.assertEqual(self.call('run').returncode, 0)
+
+    def test_crew_completion_uses_full_sha_for_detailed_run_outcomes(self):
+        self.prepare_crew_completion()
+        for selected in (False, True):
+            for outcome in ('passed', 'passed-with-override', 'passed-with-skips', 'checks-passed', ''):
+                with self.subTest(selected=selected, outcome=outcome):
+                    result = self.crew_completion('', selected=selected, outcome=outcome)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn('state: done', result.stdout)
+                    self.assertIn('source: run-step', result.stdout)
+        result = self.crew_completion('', full=False)
+        self.assertIn('state: done', result.stdout)
+
+    def test_crew_completion_uses_the_attributed_ledger_head(self):
+        self.prepare_crew_completion()
+        checked = self.git(self.copy, 'rev-parse', 'HEAD').stdout.strip()
+        ledger = f'completed task {checked[:8]} 2026-10-15 10:00'
+        for branch in ('other', 'task'):
+            with self.subTest(branch=branch):
+                primary = f'run:\n  branch: {branch}\n  status: completed\n  head: {self.base}\n  head_sha: {self.base}\noutcome: passed\n'
+                result = self.crew_completion(primary, ledger=ledger)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('state: done', result.stdout)
+                self.assertIn('source: run-step', result.stdout)
+        result = self.crew_completion(primary, ledger=ledger.replace('completed', 'running'))
+        self.assertIn('state: working', result.stdout)
+
+    def test_crew_completion_rejects_a_run_at_a_different_commit(self):
+        self.prepare_crew_completion()
+        checked = self.git(self.copy, 'rev-parse', 'HEAD').stdout.strip()
+        self.git(self.copy, 'commit', '--allow-empty', '-qm', 'later validation head')
+        successor = self.git(self.copy, 'rev-parse', 'HEAD').stdout.strip()
+        self.git(self.copy, 'reset', '--hard', checked)
+        primary = f'run:\n  branch: other\n  status: completed\n  head: {checked}\n  head_sha: {checked}\noutcome: passed\n'
+        ledger = f'completed task {successor[:8]} 2026-10-15 10:00'
+        same_branch = primary.replace('branch: other', 'branch: task')
+        canonical = same_branch.replace(f'head_sha: {checked}', f'head_sha: {successor}')
+        for result in (self.crew_completion('', head=successor), self.crew_completion(primary, ledger=ledger),
+                       self.crew_completion(same_branch, ledger=ledger), self.crew_completion(canonical)):
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('state: blocked', result.stdout)
+            self.assertIn('source: quality', result.stdout)
+
+    @unittest.skipUnless(REAL_PYTHON, 'set FM_TEST_CRAPPER_PYTHON to exercise the real pinned Crapper package')
     def test_real_crapper_rejects_changed_function_absent_from_reports(self):
         self.rule['crapper_python'] = REAL_PYTHON
         self.write_config()
