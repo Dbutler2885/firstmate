@@ -425,6 +425,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
   exit 1
 }
 META="$STATE/$ID.meta"
+# shellcheck source=bin/fm-quality-lib.sh
+. "$SCRIPT_DIR/fm-quality-lib.sh"
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
@@ -1655,6 +1657,10 @@ case "$PROVIDER" in
     [ "$away_status" -eq 0 ] || exit "$away_status"
     refuse_github_queue_while_away || exit 2
     merge_status=0
+    if ! quality_reason=$(fm_quality_accept "$STATE" "$ID" "$META" "$FM_PR_MERGE_HEAD"); then
+      echo "error: merge refused: $quality_reason" >&2
+      exit 1
+    fi
     merge_output=$(gh pr merge "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" \
       --match-head-commit "$FM_PR_MERGE_HEAD" \
       "${merge_args[@]+"${merge_args[@]}"}" "$@" 2>&1) || merge_status=$?
@@ -1712,6 +1718,10 @@ case "$PROVIDER" in
     gitlab_merge_args=()
     if [ "$FM_PR_AWAY_POSTURE" = true ]; then
       gitlab_merge_args=(--auto-merge=false)
+    fi
+    if ! quality_reason=$(fm_quality_accept "$STATE" "$ID" "$META" "$FM_PR_MERGE_HEAD"); then
+      echo "error: merge refused: $quality_reason" >&2
+      exit 1
     fi
     GITLAB_HOST="$FM_PR_HOST" glab mr merge "$PR_NUMBER" -R "$PROJECT_URL" \
       --sha "$FM_PR_MERGE_HEAD" --yes "$@" "${gitlab_merge_args[@]+"${gitlab_merge_args[@]}"}" || merge_status=$?

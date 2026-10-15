@@ -26,6 +26,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-backlog-transition-lib.sh
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
+# shellcheck source=bin/fm-quality-lib.sh
+. "$SCRIPT_DIR/fm-quality-lib.sh"
 if [ "$#" -ne 1 ] || ! fm_pr_task_id_valid "$1"; then
   echo "error: invalid local merge request" >&2
   exit 2
@@ -121,6 +123,10 @@ if ! git -C "$PROJ" merge-base --is-ancestor "$DEFAULT" "$BRANCH"; then
 fi
 
 before=$(git -C "$PROJ" rev-parse --short "$DEFAULT")
+if ! QUALITY_REASON=$(fm_quality_accept "$STATE" "$ID" "$META" "$(git -C "$PROJ" rev-parse "$BRANCH")"); then
+  echo "error: local merge refused: $QUALITY_REASON" >&2
+  exit 1
+fi
 hold_status=0
 FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
   "$SCRIPT_DIR/fm-captain-hold.sh" open "$ID" --distinguish-absent || hold_status=$?

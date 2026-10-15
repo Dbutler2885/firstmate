@@ -159,6 +159,25 @@ fi
 
 MODE=$(grep '^mode=' "$META" | tail -1 | cut -d= -f2- || true)
 PROJECT=$(grep '^project=' "$META" | tail -1 | cut -d= -f2- || true)
+QUALITY_HEAD=$PR_HEAD
+if [ "$PROVIDER" = gitlab ] && [ -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/project-quality.json" ]; then
+  QUALITY_HEAD=$(cd "$WT" && glab mr view "$URL" --output json 2>/dev/null | jq -er '.sha' 2>/dev/null) || QUALITY_HEAD=
+fi
+if [ "${KIND:-ship}" = ship ]; then
+  QUALITY_RC=0
+  if [ "$PROVIDER" = gerrit ]; then
+    # Gerrit squashes identify publication by tree, through the existing DoD
+    # gate below, rather than by equality with the worker's commit id.
+    QUALITY_REASON=$(fm_quality_accept "$STATE" "$ID" "$META") || QUALITY_RC=$?
+  else
+    QUALITY_REASON=$(fm_quality_accept "$STATE" "$ID" "$META" "$QUALITY_HEAD") || QUALITY_RC=$?
+  fi
+  if [ "$QUALITY_RC" -ne 0 ]; then
+    FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-quality-check.sh" ensure "$ID" >/dev/null || true
+    echo "error: $QUALITY_REASON" >&2
+    exit 1
+  fi
+fi
 # The gate is asked about the ready report this task's worker was told to give;
 # on a Gerrit change both publishing modes report the same published line.
 case "$PROVIDER:$MODE" in

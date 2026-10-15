@@ -1144,6 +1144,76 @@ When stripping is enabled, the hooks directory is read-only, so a hook manager r
 The flag is a home-wide attribution choice, so it is inherited into secondmate homes under the [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md) inherited-local-material contract and a secondmate's own workers keep AI trailers too.
 Per-machine Cursor `cli-config.json` attribution-off is not this contract: it does not travel with Firstmate, defaults back to on when unset, and only feeds the CLI's request to the server, so it suppresses the trailer rather than preventing it.
 
+## Project quality checks (config/project-quality.json)
+
+This optional, gitignored file enables a mandatory local quality check for each named project.
+The project key is the clone directory name used by the registry.
+Projects without a rule retain their existing delivery behavior.
+Rules are local to the operational home and are not inherited; configure each home that owns tasks for the project.
+The shared execution and receipt contract is owned by [`bin/fm-quality-check.sh`](../bin/fm-quality-check.sh).
+
+```json
+{
+  "version": 1,
+  "projects": {
+    "Wingspan": {
+      "crapper_python": "/absolute/path/to/crapper-venv/bin/python",
+      "coverage_command": ["npm", "run", "coverage"],
+      "coverage_reports": [
+        {"path": "coverage/lcov.info", "source_root": "."},
+        {"path": "backend/coverage/lcov.info", "source_root": "backend"}
+      ],
+      "threshold": 7,
+      "timeout_seconds": 600
+    }
+  }
+}
+```
+
+Firstmate needs Python 3.11 or newer when this feature is enabled.
+`crapper_python` is an absolute path to an executable interpreter with [Crapper](https://github.com/unclebob/crapper) installed.
+Pin Crapper to a reviewed commit in a private environment; the adapter consumes its Python discovery, function-span, coverage, scoring, and reporting APIs.
+A missing or incompatible package blocks validation instead of substituting a different metric.
+No tool or project dependencies are installed by the quality check itself.
+
+`coverage_command` is a nonempty argument array executed in the task's isolated project copy.
+Use the project's actual coverage command, with any required providers installed before dispatch.
+An explicit shell argument array can sequence frontend and backend commands when both must generate reports.
+The example assumes that `npm run coverage` generates both declared reports; configure a command appropriate to the project.
+A nonzero test or coverage exit blocks completion regardless of the measured score.
+
+`coverage_reports` lists the reports that command must recreate.
+Each item is either a relative path string, whose source root is the project root, or an object with `path` and `source_root`.
+Both paths must stay within the isolated copy, and report files must be untracked, ordinary single-link files.
+Accepted report basenames are `lcov.info`, `jacoco.xml`, and `coverage.out`.
+Only declared reports are loaded, using Crapper's LCOV, JaCoCo, and Go parsers; undeclared older reports are never used.
+Use LCOV for Clojure with this integration.
+Explicit LCOV paths may be anywhere below the project root, including multiple packages; `source_root` qualifies package-relative source names so identical frontend and backend filenames remain distinct.
+Missing, empty, or unusable coverage blocks the check.
+
+`threshold` defaults to 7 and must be a finite nonnegative number.
+A changed function passes at exactly the threshold and fails above it.
+`timeout_seconds` defaults to 600 and must be an integer from 1 through 3600; each of the coverage and Crapper commands has that bound plus the shared runner's cleanup grace.
+
+Source and test inputs must be committed before the completion check can pass, so uncommitted local fixes cannot qualify older published code.
+Only production functions touched by the task's Git diff are scored.
+Tests and unsupported source languages are not scored, although the configured coverage command still has to succeed.
+The launch commit is saved as `quality_base`; a current target merge-base excludes upstream changes after a rebase when the target ref is available.
+A configured legacy task without that field must be started again before it can qualify.
+The check's automatic trigger is the watcher's normal poll of a ship's reconciled completion declaration.
+Readiness, PR registration, and both PR and local landing refuse without a matching pass for configured tasks, including when a forge or no-mistakes already reports success.
+For GitHub and GitLab PR registration and landing, the receipt also has to match the live published head.
+If no-mistakes publishes fixes from its own copy, bring those changes back through the guarded `branch_sync` action AXI offers before reporting final readiness; an older local copy cannot qualify the published changes.
+Gerrit publication retains its existing tree-equivalence check because it publishes a squash, and Firstmate never submits that change.
+
+Logs and scored function entries remain private under the home selected by `FM_HOME`.
+A failed attempt sends its report to the task's durable steering inbox; failed delivery remains visible in that report and the task cannot pass.
+After the agent commits a repair and reports ready again, the next completion poll validates it.
+An old completion declaration does not trigger tests or feedback while the agent is editing.
+An unchanged failed attempt is not automatically rerun, so a persistent failure cannot repeatedly consume agent turns.
+Use the script's `run` command for an explicit retry of unchanged code, such as after repairing local tooling.
+This correctness check assumes the home's configuration and state are supervisor-controlled; it does not sandbox a malicious agent sharing the same OS identity.
+
 ## Project capacity (config/project-capacity)
 
 The optional local, gitignored `config/project-capacity` tells Firstmate how many workers a project can run at once on this machine, for a project whose machine-local resource - a heavy test suite, a local editor stack, a device - only serves a few workers at a time.

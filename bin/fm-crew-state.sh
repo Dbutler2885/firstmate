@@ -24,7 +24,7 @@
 # Output is one stable, parseable, token-tight line firstmate can read every
 # heartbeat:
 #
-#   state: <working|parked|done|blocked|paused|failed|unknown> · source: <run-step|pane|status-log|remote-endpoint|none> · <detail>
+#   state: <working|parked|done|blocked|paused|failed|unknown> · source: <run-step|pane|status-log|remote-endpoint|quality|none> · <detail>
 #
 # Logic, in order:
 #   1. Resolve worktree + backend target + kind from state/<id>.meta. A meta
@@ -205,6 +205,19 @@ SEP=' · '
 
 # Emit the one canonical line and exit 0. Detail is optional.
 emit() {  # <state> <source> [detail]
+  local quality_reason quality_head quality_rc=0
+  if [ "$1" = "done" ] && [ "${KIND:-}" = ship ]; then
+    if [ "$2" = run-step ]; then
+      quality_head=$(strip_quotes "$(nm_field head)")
+      quality_reason=$(fm_quality_accept "$STATE" "$ID" "$META" "$quality_head") || quality_rc=$?
+    else
+      quality_reason=$(fm_quality_accept "$STATE" "$ID" "$META") || quality_rc=$?
+    fi
+    if [ "$quality_rc" -ne 0 ]; then
+      printf 'state: blocked%s source: quality%s %s\n' "$SEP" "$SEP" "$quality_reason"
+      exit 0
+    fi
+  fi
   local line="state: $1${SEP}source: $2"
   [ -n "${3:-}" ] && line="$line${SEP}$3"
   printf '%s\n' "$line"
