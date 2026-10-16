@@ -242,53 +242,219 @@ def explain(result):
     return 0 if result.get('status') == 'passed' else 1
 
 
+def log_size(log):
+    log.flush()
+    return os.fstat(log.fileno()).st_size
+
+
+def run_checks(ctx, result, failure):
+    """Run the coverage command and Crapper, recording in failure which stage stopped."""
+    if not ctx['clean']:
+        raise ValueError('Commit source and test changes before reporting ready for quality validation')
+    for report in ctx['reports']:
+        path = Path(ctx['root']) / report['path']
+        if path.exists() or path.is_symlink():
+            ordinary(path)
+            path.unlink()
+    with open(result['log'], 'a') as log:
+        log.write(f"Task {TASK}; HEAD {ctx['head']}; base {ctx['base']}; threshold {ctx['threshold']}\n")
+        start = log_size(log)
+        rc = subprocess.call(timed_command(ctx['timeout'], ctx['rule']['coverage_command']), cwd=ctx['root'], stdout=log, stderr=log)
+        if rc:
+            failure.update(kind='tests', exit=rc, span=(start, log_size(log)))
+            raise ValueError(f'coverage/tests exited {rc}')
+        failure['tests_passed'] = True
+        for report in ctx['reports']:
+            path = Path(ctx['root']) / report['path']
+            ordinary(path)
+            if path.stat().st_size == 0:
+                raise ValueError(f'Empty coverage report: {path}')
+        current = context()
+        if current is None or current['key'] != ctx['key']:
+            raise ValueError('code or configuration changed while tests ran')
+        request = {key: ctx[key] for key in ('root', 'base', 'files', 'reports', 'threshold')}
+        request['output'] = result['entries']
+        request_path = Path(result['log'] + '.request.json')
+        atomic(request_path, request)
+        start = log_size(log)
+        rc = subprocess.call(timed_command(ctx['timeout'], [ctx['rule']['crapper_python'], str(CODE / 'fm-quality-evaluate.py'), str(request_path)]), cwd=ctx['root'], stdout=log, stderr=log, env=dict(os.environ, PYTHONUNBUFFERED='1'))
+        if rc:
+            failure.update(kind='score' if rc == 2 else 'setup', span=(start, log_size(log)))
+            raise ValueError(f'Crapper exited {rc}' + (' (threshold exceeded)' if rc == 2 else ''))
+        entries_path = Path(result['entries'])
+        ordinary(entries_path)
+        entries = json.loads(entries_path.read_text())
+        if not isinstance(entries, list):
+            raise ValueError('Crapper did not produce a function-entry array')
+        for entry in entries:
+            score = entry.get('crap') if isinstance(entry, dict) else None
+            if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(score) or score < 0:
+                raise ValueError('Crapper produced an invalid or missing CRAP score')
+            if score > ctx['threshold']:
+                failure['kind'] = 'score'
+                raise ValueError('Crapper report exceeds the configured threshold')
+        current = context()
+        if current is None or current['key'] != ctx['key']:
+            failure['kind'] = 'setup'
+            raise ValueError('code or configuration changed while Crapper ran')
+
+
+# Failure feedback goes through fm-send's steering inbox, so it carries the
+# facts inline and stays bounded; the full log is optional deeper detail.
+EXCERPT_CHARS = 1800
+SHOWN_FUNCTIONS = 6
+SHOWN_LEVERS = 4
+ANSI = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
+FAILURE_LINE = re.compile(r'FAIL|ERROR|Error\b|Exception\b|^\s*not ok\b|panic:|[✗✖×●]')
+
+
+def log_lines(path, span):
+    start, end = span
+    start = max(start, end - 262144)
+    with open(path, 'rb') as stream:
+        stream.seek(start)
+        text = stream.read(end - start).decode('utf-8', 'replace')
+    lines = (ANSI.sub('', line).replace('\r', '').rstrip() for line in text.splitlines())
+    return [line[:200] for line in lines if line.strip()]
+
+
+def bounded(lines, limit, keep_last):
+    """Join lines within limit characters, dropping from the front when keep_last."""
+    kept, used = [], 0
+    for line in (reversed(lines) if keep_last else lines):
+        if used + len(line) + 1 > limit:
+            break
+        kept.append(line)
+        used += len(line) + 1
+    return '\n'.join(reversed(kept) if keep_last else kept)
+
+
+def number(value):
+    return f'{value:.1f}'.removesuffix('.0')
+
+
+def common_footer(result):
+    return ("If a missing tool or coverage setup problem blocks the check, report that blocker to Firstmate. "
+            "Do not change the quality configuration or receipt to bypass it.\n"
+            f"Full log, only if you need more detail: {result['log']}")
+
+
+def tests_message(ctx, result, failure, short):
+    rc = failure['exit']
+    how = f"did not finish within {ctx['timeout']} seconds" if rc in (124, 137) else f'exited {rc}'
+    lines = log_lines(result['log'], failure['span'])
+    flagged = list(dict.fromkeys(line for line in lines if FAILURE_LINE.search(line)))
+    parts = [f'The quality check failed for commit {short}: the coverage command, which runs the tests, {how}.',
+             'Nothing was scored, because scoring needs a passing test run.']
+    if flagged:
+        parts.append('Failing tests and error lines from its output:\n' + bounded(flagged, EXCERPT_CHARS // 2, False))
+    tail = [line for line in lines[-12:] if line not in flagged]
+    if tail or not flagged:
+        parts.append('Last lines of its output:\n' + bounded(tail, EXCERPT_CHARS // 2, True) if tail else 'It printed no output.')
+    parts.append('Fix the failing tests or the code they test, commit the repair, and report ready again. '
+                 'Do not delete or weaken tests just to make them pass.')
+    return '\n'.join(parts + [common_footer(result)])
+
+
+def setup_message(result, reason, failure, short):
+    # Unbuffered Crapper output keeps its final line the actual error.
+    lines = log_lines(result['log'], failure['span']) if 'span' in failure else []
+    flagged = [line for line in lines if FAILURE_LINE.search(line)]
+    error = (flagged or lines or [reason])[-1]
+    parts = [f'The quality check could not finish for commit {short}: {error}']
+    if error != reason:
+        parts.append(f'Check result: {reason}')
+    parts.append('What passed: the tests and the coverage run. Scoring did not finish.' if failure.get('tests_passed') else 'The tests did not run.')
+    parts.append('Fix the cause if it is in your change, commit the repair, and report ready again.')
+    return '\n'.join(parts + [common_footer(result)])
+
+
+def describe_function(entry, threshold, previous_path):
+    path = entry.get('path') or 'unknown file'
+    where = 'same file' if path == previous_path else path
+    score, branches, coverage = entry.get('crap'), entry.get('complexity'), entry.get('coverage')
+    fails = not isinstance(score, (int, float)) or score > threshold
+    verdict = f'FAILS (limit {number(threshold)})' if fails else 'passes'
+    detail = (f"branches: {branches if isinstance(branches, int) else '?'}   "
+              f"test coverage: {number(coverage) + '%' if isinstance(coverage, (int, float)) else '?'}   "
+              f"score: {f'{score:.1f}' if isinstance(score, (int, float)) else 'none'}   {verdict}")
+    return f"  {str(entry.get('name') or '?')[:60]}  ({where[:80]})\n    {detail}"
+
+
+def lever(entry, threshold):
+    branches, coverage = entry.get('complexity'), entry.get('coverage')
+    name, most = str(entry.get('name') or '?')[:60], math.floor(threshold)
+    if not isinstance(branches, int) or not isinstance(coverage, (int, float)):
+        return f'  {name}: its branch count or coverage is unknown; check the full log.'
+    if coverage >= 100:
+        return f'  {name}: coverage is already 100%, so only option 2 can work: get it to {most} branches or fewer.'
+    if branches > threshold:
+        return (f'  {name}: coverage is {number(coverage)}%, but even full coverage would leave the score at {branches}, '
+                f'so it needs option 2 (get it to {most} branches or fewer); better tests also help.')
+    return (f'  {name}: coverage is {number(coverage)}%, so better tests (option 1) can bring it under the limit; '
+            f'full coverage would make the score {branches}. Option 2 also works.')
+
+
+SCORE_GUIDE = """How the score works: score = branches x branches x (share of the function the tests do NOT cover) cubed, plus branches. It rises with more branches and falls with more test coverage. At 100% coverage the score equals the number of branches, so tests cannot lower it any further.
+Two ways to lower it:
+1. Add or improve tests. This helps only while coverage is below 100%. Write tests that check behavior, not tests that only run the lines.
+2. Simplify the function: fewer branches (split it into smaller functions, remove nested conditions). Splitting is fine, but moving the same logic around without making it simpler does not help."""
+
+OWNERSHIP = """Before fixing anything, check which failing functions are yours. A function is yours if your change added it or made it more complex. If a failing function was already over the limit before your change (compare with the starting commit) and you only touched it lightly or not at all, do not refactor it yourself. Report it to Firstmate with the function name, its score, and what you changed in it, then wait; Firstmate will take it to the captain. Fix the functions that are yours in the meantime.
+Do not delete or weaken behavior, or revert changes, just to get under the limit. When done, commit the repair and report ready again."""
+
+
+def score_message(ctx, result, short):
+    path = Path(result['entries'])
+    ordinary(path)
+    entries = json.loads(path.read_text())
+    if not isinstance(entries, list) or not all(isinstance(entry, dict) for entry in entries):
+        raise ValueError('unreadable entries')
+    threshold = ctx['threshold']
+    failing = [entry for entry in entries if not isinstance(entry.get('crap'), (int, float)) or entry['crap'] > threshold]
+    if not failing:
+        raise ValueError('no failing entries')
+    shown = (failing + [entry for entry in entries if entry not in failing])[:SHOWN_FUNCTIONS]
+    listing, previous = [], None
+    for entry in shown:
+        listing.append(describe_function(entry, threshold, previous))
+        previous = entry.get('path') or 'unknown file'
+    if len(entries) > len(shown):
+        listing.append(f'  ...and {len(entries) - len(shown)} more (see the full log).')
+    if len(entries) == 1:
+        failed = 'the one changed function scores'
+    else:
+        failed = f"{len(failing)} of the {len(entries)} changed functions score{'s' if len(failing) == 1 else ''}"
+    parts = [f'The quality check failed for commit {short}.',
+             'What passed: the tests (all pass) and the coverage run.',
+             f'What failed: {failed} above the limit of {number(threshold)}.',
+             *listing, SCORE_GUIDE, 'Which one applies:', *(lever(entry, threshold) for entry in failing[:SHOWN_LEVERS])]
+    if len(failing) > SHOWN_LEVERS:
+        parts.append('  For the rest: below 100% coverage tests can help; at 100% only simplifying can.')
+    parts.append(OWNERSHIP)
+    return '\n'.join(parts + [common_footer(result)])
+
+
+def failure_message(ctx, result, reason, failure):
+    short = ctx['head'][:8]
+    try:
+        if failure['kind'] == 'score':
+            return score_message(ctx, result, short)
+        if failure['kind'] == 'tests':
+            return tests_message(ctx, result, failure, short)
+        return setup_message(result, reason, failure, short)
+    except Exception:
+        # Feedback must still go out when the scored entries cannot be read.
+        return setup_message(result, reason, {'tests_passed': failure.get('tests_passed')}, short)
+
+
 def execute(ctx, result):
     ok = False
     reason = 'quality check interrupted'
+    failure = {'kind': 'setup'}
     try:
-        if not ctx['clean']:
-            raise ValueError('Commit source and test changes before reporting ready for quality validation')
-        for report in ctx['reports']:
-            path = Path(ctx['root']) / report['path']
-            if path.exists() or path.is_symlink():
-                ordinary(path)
-                path.unlink()
-        with open(result['log'], 'a') as log:
-            log.write(f"Task {TASK}; HEAD {ctx['head']}; base {ctx['base']}; threshold {ctx['threshold']}\n")
-            log.flush()
-            rc = subprocess.call(timed_command(ctx['timeout'], ctx['rule']['coverage_command']), cwd=ctx['root'], stdout=log, stderr=log)
-            if rc:
-                raise ValueError(f'coverage/tests exited {rc}')
-            for report in ctx['reports']:
-                path = Path(ctx['root']) / report['path']
-                ordinary(path)
-                if path.stat().st_size == 0:
-                    raise ValueError(f'Empty coverage report: {path}')
-            current = context()
-            if current is None or current['key'] != ctx['key']:
-                raise ValueError('code or configuration changed while tests ran')
-            request = {key: ctx[key] for key in ('root', 'base', 'files', 'reports', 'threshold')}
-            request['output'] = result['entries']
-            request_path = Path(result['log'] + '.request.json')
-            atomic(request_path, request)
-            rc = subprocess.call(timed_command(ctx['timeout'], [ctx['rule']['crapper_python'], str(CODE / 'fm-quality-evaluate.py'), str(request_path)]), cwd=ctx['root'], stdout=log, stderr=log)
-            if rc:
-                raise ValueError(f'Crapper exited {rc} (2 means threshold exceeded)')
-            entries_path = Path(result['entries'])
-            ordinary(entries_path)
-            entries = json.loads(entries_path.read_text())
-            if not isinstance(entries, list):
-                raise ValueError('Crapper did not produce a function-entry array')
-            for entry in entries:
-                score = entry.get('crap') if isinstance(entry, dict) else None
-                if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(score) or score < 0:
-                    raise ValueError('Crapper produced an invalid or missing CRAP score')
-                if score > ctx['threshold']:
-                    raise ValueError('Crapper report exceeds the configured threshold')
-            current = context()
-            if current is None or current['key'] != ctx['key']:
-                raise ValueError('code or configuration changed while Crapper ran')
-            ok, reason = True, 'passed for the current code'
+        run_checks(ctx, result, failure)
+        ok, reason = True, 'passed for the current code'
     except Exception as error:
         reason = str(error).replace('\n', ' ')[:600]
     result.update(status='passed' if ok else 'failed', reason=reason, finished=time.time())
@@ -307,8 +473,7 @@ def execute(ctx, result):
             atomic(RESULT, result)
         (STATE / f'{TASK}.turn-ended').touch()
         if not ok and current is not None and current['key'] == ctx['key']:
-            reports = result['log'] + (" and " + result['entries'] if Path(result['entries']).exists() else "")
-            message = f"The mandatory quality check for HEAD {ctx['head']} failed: {reason}. Read {reports}, fix the failing tests or simplify/test the changed functions, commit the repair, and report ready again. If the report identifies a missing tool or coverage setup problem, report that blocker to Firstmate. Do not change the quality configuration or receipt to bypass it."
+            message = failure_message(ctx, result, reason, failure)
             notification = subprocess.run(timed_command(60, [str(CODE / 'fm-send.sh'), TASK, message]), cwd=HOME, env=dict(os.environ, FM_SEND_EXPECTED_SPAWN_GEN=ctx['incarnation'], FM_SEND_IDEMPOTENT='1'), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             with open(result['log'], 'a') as log:
                 log.write('\nFeedback delivery:\n' + notification.stdout)

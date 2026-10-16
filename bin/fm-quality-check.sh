@@ -28,7 +28,9 @@
 # cached until edits or an explicit run retry, preventing repeated model wakes.
 # Polling waits for a new completion declaration before checking repaired code;
 # an old done event never starts another run while the agent is editing.
-# A failure is sent once through fm-send's durable inbox and retains its report.
+# A failure is sent once through fm-send's durable inbox as a bounded summary
+# that carries what passed and failed, so the worker need not open the log,
+# and the full report is retained as optional detail.
 # state/quality/ retains private receipts, logs, scored entries, and requests.
 # A removed/replaced task receives no late feedback. This is a local correctness
 # gate, not protection against a malicious agent with the supervisor's OS access.

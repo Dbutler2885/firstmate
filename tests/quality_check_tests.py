@@ -30,9 +30,14 @@ class QualityGate(unittest.TestCase):
 from pathlib import Path
 r=json.loads(Path(sys.argv[2]).read_text())
 assert r['threshold']==7
-Path(r['output']).write_text(json.dumps([{'name':'fixture','crap':float(os.environ.get('TEST_SCORE','1'))}]))
+if os.environ.get('TEST_CRAPPER_ERROR'):
+    print('fixture discovery output')
+    print(os.environ['TEST_CRAPPER_ERROR'], file=sys.stderr)
+    sys.exit(1)
+entries=json.loads(os.environ['TEST_ENTRIES']) if os.environ.get('TEST_ENTRIES') else [{'name':'fixture','crap':float(os.environ.get('TEST_SCORE','1'))}]
+Path(r['output']).write_text(json.dumps(entries))
 print('fixture CRAP report')
-sys.exit(2 if float(os.environ.get('TEST_SCORE','1'))>7 else 0)
+sys.exit(2 if any(entry['crap']>7 for entry in entries) else 0)
 ''')
         fake_interpreter.chmod(0o755)
         sender = self.home / 'bin/fm-send.sh'
@@ -62,6 +67,10 @@ count=home/'state/count'
 count.write_text(str(int(count.read_text())+1) if count.exists() else '1')
 assert not (root/os.environ.get('TEST_REPORT','coverage/lcov.info')).exists(), 'stale report survived'
 time.sleep(float(os.environ.get('TEST_DELAY','0')))
+for line in range(int(os.environ.get('TEST_NOISE','0'))):
+    print(f'emulator noise {line}')
+if os.environ.get('TEST_FAIL_OUTPUT'):
+    print(os.environ['TEST_FAIL_OUTPUT'])
 if os.environ.get('TEST_EDIT'):
     (root/'source.py').write_text('def simple():\\n    return 99\\n')
 if os.environ.get('TEST_ARTIFACTS'):
@@ -125,7 +134,7 @@ raise SystemExit(int(os.environ.get('TEST_COVERAGE_EXIT','0')))
     def test_threshold_failure_feedback_once_and_repair(self):
         self.assertEqual(self.call('run', TEST_SCORE='8').returncode, 1)
         feedback = (self.home / 'state/feedback').read_text()
-        self.assertIn('mandatory quality check for HEAD', feedback)
+        self.assertIn('The quality check failed for commit', feedback)
         self.assertEqual(self.call('ensure').returncode, 1)
         self.assertEqual((self.home / 'state/count').read_text(), '1')
         self.assertEqual((self.home / 'state/feedback').read_text(), feedback)
@@ -133,6 +142,74 @@ raise SystemExit(int(os.environ.get('TEST_COVERAGE_EXIT','0')))
         self.git(self.copy, 'commit', '-qam', 'repair')
         self.assertEqual(self.call('run').returncode, 0)
         self.assertEqual(self.call('status').returncode, 0)
+
+    def feedback(self):
+        message = (self.home / 'state/feedback').read_text().removeprefix('task\n').rstrip('\n')
+        self.assertLess(len(message), 6000)
+        self.assertTrue(message.endswith('Full log, only if you need more detail: ' + self.receipt()['log']), message)
+        self.assertIn('Do not change the quality configuration or receipt to bypass it.', message)
+        return message
+
+    def test_score_failure_message_is_self_contained(self):
+        entries = [{'name': 'startSession', 'path': 'src/store.ts', 'complexity': 11, 'coverage': 100.0, 'crap': 11.0},
+                   {'name': 'growing', 'path': 'src/store.ts', 'complexity': 9, 'coverage': 50.0, 'crap': 19.125},
+                   {'name': 'untested', 'path': 'src/other.ts', 'complexity': 4, 'coverage': 20.0, 'crap': 12.192},
+                   {'name': 'summaryNumber', 'path': 'src/other.ts', 'complexity': 5, 'coverage': 85.7143, 'crap': 5.0729}]
+        self.assertEqual(self.call('run', TEST_ENTRIES=json.dumps(entries), TEST_NOISE='40').returncode, 1)
+        message = self.feedback()
+        head = self.git(self.copy, 'rev-parse', 'HEAD').stdout.strip()
+        self.assertTrue(message.startswith(f'The quality check failed for commit {head[:8]}.'), message)
+        self.assertNotIn(head, message)
+        self.assertNotIn('emulator noise', message)
+        self.assertIn('What passed: the tests (all pass) and the coverage run.', message)
+        self.assertIn('What failed: 3 of the 4 changed functions score above the limit of 7.', message)
+        self.assertIn('  startSession  (src/store.ts)\n    branches: 11   test coverage: 100%   score: 11.0   FAILS (limit 7)', message)
+        self.assertIn('  growing  (same file)\n    branches: 9   test coverage: 50%   score: 19.1   FAILS (limit 7)', message)
+        self.assertIn('  summaryNumber  (same file)\n    branches: 5   test coverage: 85.7%   score: 5.1   passes', message)
+        self.assertIn('At 100% coverage the score equals the number of branches', message)
+        self.assertIn('Write tests that check behavior, not tests that only run the lines.', message)
+        self.assertIn('moving the same logic around without making it simpler does not help', message)
+        self.assertIn('  startSession: coverage is already 100%, so only option 2 can work: get it to 7 branches or fewer.', message)
+        self.assertIn('  growing: coverage is 50%, but even full coverage would leave the score at 9, so it needs option 2', message)
+        self.assertIn('  untested: coverage is 20%, so better tests (option 1) can bring it under the limit', message)
+        self.assertNotIn('  summaryNumber:', message)
+        self.assertIn('do not refactor it yourself. Report it to Firstmate with the function name, its score, and what you changed in it, then wait', message)
+        self.assertIn('Do not delete or weaken behavior, or revert changes, just to get under the limit.', message)
+        self.assertIn('commit the repair and report ready again', message)
+        self.assertIn('report that blocker to Firstmate', message)
+
+    def test_score_failure_message_stays_bounded(self):
+        entries = [{'name': f'function{index}' + 'x' * 200, 'path': f'src/{index}/' + 'y' * 300, 'complexity': 20, 'coverage': 10.0, 'crap': 311.6}
+                   for index in range(40)]
+        self.assertEqual(self.call('run', TEST_ENTRIES=json.dumps(entries)).returncode, 1)
+        message = self.feedback()
+        self.assertIn('What failed: 40 of the 40 changed functions score above the limit of 7.', message)
+        self.assertIn('...and 34 more (see the full log).', message)
+        self.assertIn('  For the rest: below 100% coverage tests can help; at 100% only simplifying can.', message)
+        self.assertIn('Do not delete or weaken behavior', message)
+
+    def test_test_failure_message_leads_with_failing_lines(self):
+        failure = 'FAILED tests/test_store.py::test_start - AssertionError: expected 2'
+        self.assertEqual(self.call('run', TEST_NOISE='200', TEST_FAIL_OUTPUT=failure, TEST_COVERAGE_EXIT='3').returncode, 1)
+        message = self.feedback()
+        self.assertTrue(message.startswith('The quality check failed for commit '), message)
+        self.assertIn('the coverage command, which runs the tests, exited 3.', message)
+        self.assertIn('Failing tests and error lines from its output:\n' + failure, message)
+        self.assertIn('Last lines of its output:\n', message)
+        self.assertIn('emulator noise 199', message)
+        self.assertNotIn('emulator noise 0\n', message)
+        self.assertEqual(message.count(failure), 1)
+        self.assertNotIn('changed functions score', message)
+
+    def test_setup_failure_message_leads_with_the_error_line(self):
+        error = 'No coverage metrics for changed function simple in source.py; declare a fresh report that covers it'
+        self.assertEqual(self.call('run', TEST_CRAPPER_ERROR=error, TEST_NOISE='5').returncode, 1)
+        message = self.feedback()
+        self.assertTrue(message.startswith('The quality check could not finish for commit '), message)
+        self.assertEqual(message.splitlines()[0].split(': ', 1)[1], error)
+        self.assertIn('Check result: Crapper exited 1\n', message)
+        self.assertIn('What passed: the tests and the coverage run. Scoring did not finish.', message)
+        self.assertNotIn('emulator noise', message)
 
     def test_any_edit_invalidates_pass(self):
         self.assertEqual(self.call('run').returncode, 0)
@@ -602,6 +679,7 @@ raise SystemExit(int(os.environ.get('TEST_COVERAGE_EXIT','0')))
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn('Crapper exited 1', self.receipt()['reason'])
         self.assertIn('No coverage metrics for changed function untested in backend.py', Path(self.receipt()['log']).read_text())
+        self.assertIn(': No coverage metrics for changed function untested in backend.py', self.feedback().splitlines()[0])
         self.assertEqual(self.call('status').returncode, 1)
 
     @unittest.skipUnless(REAL_PYTHON, 'set FM_TEST_CRAPPER_PYTHON to exercise the real pinned Crapper package')
@@ -649,6 +727,9 @@ raise SystemExit(int(os.environ.get('TEST_COVERAGE_EXIT','0')))
         self.assertEqual(legacy['coverage'], 100.0)
         self.assertEqual(legacy['crap'], legacy['complexity'])
         self.assertGreater(legacy['crap'], 7)
+        message = self.feedback()
+        self.assertIn(f"  legacy  ({legacy['path']})\n    branches: {legacy['complexity']}   test coverage: 100%   score: {legacy['crap']:.1f}   FAILS (limit 7)", message)
+        self.assertIn('  legacy: coverage is already 100%, so only option 2 can work: get it to 7 branches or fewer.', message)
 
 
 if __name__ == '__main__':

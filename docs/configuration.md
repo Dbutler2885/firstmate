@@ -1211,7 +1211,7 @@ If no-mistakes publishes fixes from its own copy, bring those changes back throu
 Gerrit publication retains its existing tree-equivalence check because it publishes a squash, and Firstmate never submits that change.
 
 Logs and scored function entries remain private under the home selected by `FM_HOME`.
-A failed attempt sends its report to the task's durable steering inbox; failed delivery remains visible in that report and the task cannot pass.
+A failed attempt sends a self-contained summary of what passed and what failed to the task's durable steering inbox, naming the retained full report only as optional detail; failed delivery remains visible in that report and the task cannot pass.
 After the agent commits a repair and reports ready again, the next completion poll validates it.
 An old completion declaration does not trigger tests or feedback while the agent is editing.
 An unchanged failed attempt is not automatically rerun, so a persistent failure cannot repeatedly consume agent turns.
